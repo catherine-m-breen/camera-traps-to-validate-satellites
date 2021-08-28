@@ -1,0 +1,219 @@
+
+
+
+
+/// binary snow map 
+
+var table = ee.FeatureCollection("users/catherinembreen/ScandCam_AllCameras_05072020_XYTableToPoint"),
+    geometry = /* color: #d63000 */ee.Geometry.MultiPoint();
+
+
+
+
+/* Extract a TimeSeries from both the Terra and 
+Aqua image collections for various locations
+*/
+//////////////////////////////////DATA INPUTS/////////////////////////////
+
+var norwayShape = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017')
+  .filter(ee.Filter.or(
+    ee.Filter.eq('country_na', 'Norway'), 
+    ee.Filter.eq('country_na', 'Sweden')))
+var NDSI = ee.ImageCollection("MODIS/006/MOD10A1")
+  .select(['NDSI_Snow_Cover'])
+  .filter(ee.Filter.date('2018-01-01', '2020-06-30'))
+ // .map(function(image){return image.clip(norwayShape)}) 
+var NDVI = ee.ImageCollection('MODIS/MOD09GA_006_NDVI')//'MODIS/006/MOD13A1')  // MODIS NDVI, could update with another dataset
+  .select('NDVI')
+  .filter(ee.Filter.date('2018-01-01','2020-06-30'))
+ // .map(function(image){return image.clip(norwayShape)})
+
+//// Join the NDVI and NDSI collections
+
+// Specify an equals filter for image timestamps.
+var filter = ee.Filter.equals({
+  leftField: 'system:index',
+  rightField: 'system:index'
+});
+
+// Create the join.
+var simpleJoin = ee.Join.simple();
+
+// Apply join
+var mod1join = ee.ImageCollection(simpleJoin.apply(NDVI, NDSI, filter))
+var mod2join = ee.ImageCollection(simpleJoin.apply(NDSI, NDVI, filter))
+
+print('Joined', mod1join, mod2join)
+
+var final_col = mod1join.map(function(img){
+
+  // Create a collection with 1 image
+  var temp = ee.ImageCollection(ee.List([img]));
+
+  // Apply join to collection 2
+  // Resulting collection will have 1 image with exact same date as img
+  var join = simpleJoin.apply(mod2join, temp, filter);
+
+  // Get resulting image
+  var i2 = ee.Image(join.first())
+
+  return img.addBands(i2)
+})
+
+print(final_col.first())
+
+////////// SCA Map ////////////
+
+//var linearthres = expression(
+  //'-0.5 * (NDSI) + 0.3',{
+  //  'NDSI': img.select('NDSI_Snow_Cover')
+  //})
+  
+//var parabolicthres = expression (
+//  '(-4.5) * (NDSI)^2 + 4.75 * (NDSI) - 0.18',{
+//    'NDSI': img.select('NDSI_Snow_Cover')
+//  })  
+
+var snowmask = function(img){
+    // snow = all pixels where NDSI > 0.4 is snow
+  var snow1 = img.select('NDSI_Snow_Cover').gte(40).remap([1],[1])//.rename('snow1') //.remap([0],[1]) 
+  var snow2 = img.select('NDSI_Snow_Cover').gt(10)
+     .and(img.select('NDSI_Snow_Cover').lt(40))
+    // .and(img.select('NDVI').gt(0.2))
+    .and(img.select('NDVI').gte(img.expression(
+  '-0.5 * (NDSI)/100 + 0.3',{
+    'NDSI': img.select('NDSI_Snow_Cover')
+  })))
+  .and(img.select('NDVI').lte(img.expression (
+  '(-4.5) * (NDSI)/100 * (NDSI)/100 + 4.75 * (NDSI)/100 - 0.18',{
+    'NDSI': img.select('NDSI_Snow_Cover')
+  }))) 
+     .remap([1],[2])//rename('snow2')//remap([2],[0])
+  return img.addBands(ee.ImageCollection([snow1.byte(),snow2.byte()]).mosaic())//,snow2.byte()]).mosaic())          //should this be 0 because NDSI already masks for snow? 
+                        //Should I go back to the raw imagery
+}
+
+//rename vs remap?/
+// land classes: 1 - snow above 0.4 ; 2 - snow between 0.4 and 0.1 above NDVI of 0.2
+
+var snowmap = final_col.map(snowmask) // this has all the data!!
+
+
+
+var snowmapdate = snowmap.filter(ee.Filter.date('2018-03-29'))
+print(snowmapdate)
+
+//// clip to just one cluster
+
+var snowmapInnlandetcluster = snowmapdate.map(function(image){return image.clip(Innlandet)})
+
+///// Visualization & Testing ///
+
+var Vis1 = {
+  min: 0.0,
+  max: 2.0,
+  palette: ['black', // barren  
+ 'white','33C7FF'   // snow and ice
+ ],};
+
+
+
+
+Map.setCenter(15.9967, 62.8518,10);
+Map.addLayer(snowmapdate.select('NDSI_Snow_Cover').first())
+Map.addLayer(snowmapdate.select('NDVI').first())
+Map.addLayer(snowmapdate.select('remapped').first(),Vis1,'binarysnowmap1')
+Map.addLayer(snowmapInnlandetcluster.select('remapped').first(),Vis1,'binarysnowmapInnlandet')
+
+
+
+  
+//////////////////////// exporting /////////
+
+//Binary Snow Map Export
+
+var extraction = snowmap.select('remapped').map(function(img) {
+  return img.reduceRegions({
+      collection: table.select('LokalitetID'),
+      reducer: ee.Reducer.mode(), // try mean and mode
+      scale: 30
+    }).map(function(f){
+        return f.set('date', img.date());
+    });
+}).flatten()
+
+Export.table.toDrive({
+  collection: extraction, 
+  description: 'binarysnowmap_mode', 
+  selectors: (["LokalitetID","mode","date"]),
+  folder: 'GEE',
+  fileFormat: 'CSV'
+});
+
+
+
+//////
+
+
+// set position of panel
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    padding: '8px 15px'
+  }
+});
+ 
+// Create legend title
+var legendTitle = ui.Label({
+  value: 'Legend',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '18px',
+    margin: '0 0 4px 0',
+    padding: '0'
+    }
+});
+ 
+// Add the title to the panel
+legend.add(legendTitle);
+ 
+// Creates and styles 1 row of the legend.
+var makeRow = function(color, name) {
+ 
+      // Create the label that is actually the colored box.
+      var colorBox = ui.Label({
+        style: {
+          backgroundColor: '#' + color,
+          // Use padding to give the box height and width.
+          padding: '8px',
+          margin: '0 0 4px 0'
+        }
+      });
+ 
+      // Create the label filled with the description text.
+      var description = ui.Label({
+        value: name,
+        style: {margin: '0 0 4px 6px'}
+      });
+ 
+      // return the panel
+      return ui.Panel({
+        widgets: [colorBox, description],
+        layout: ui.Panel.Layout.Flow('horizontal')
+      });
+};
+ 
+//  Palette with the colors
+var palette =['000000', 'FFFFFF', '33C7FF'];
+ 
+// name of the legend
+var names = ['No snow','Snow with Satellite Snow Value > 40','Snow with 10 < Satellite Snow Value <40, and Vegetation >= -0.5(NDSI)+0.3 & -4.5(NDSI)^2 + 4.75(NDSI)-0.18 (Klein et al. 1998)'];
+ 
+// Add color and and names
+for (var i = 0; i < 3; i++) {
+  legend.add(makeRow(palette[i], names[i]));
+  }  
+ 
+// add legend to map (alternatively you can also print the legend to the console)
+Map.add(legend);
+  
