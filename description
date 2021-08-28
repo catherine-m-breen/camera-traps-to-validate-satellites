@@ -1,0 +1,1 @@
+global expression is a file that takes even masked values and gives them a 3. This can inflate the no snow values, because clouds will be considered as no snow. The count for 1s and 2s should be the same though. 
