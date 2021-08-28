@@ -3,4 +3,7 @@ MODIS Collection 6 removed the Snow Covered Area (SCA) band, instead replacing i
 
 
 
-Put in differentiation between global expression 1 and global expression 2
+Put in differentiation between global expression 1 and global expression 2.
+
+Global Expression 1: global expression is a file that takes even masked values and gives them a 3. This can inflate the no snow values, because clouds will be considered as no snow. The count for 1s and 2s should be the same though. 
+
