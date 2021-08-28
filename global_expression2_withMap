@@ -45,14 +45,14 @@ var mod2join = ee.ImageCollection(simpleJoin.apply(NDSI, NDVI, filter))
 
 print('Joined', mod1join, mod2join)
 
-var final_col = mod1join.map(function(img){
+var final_col = mod2join.map(function(img){
 
   // Create a collection with 1 image
   var temp = ee.ImageCollection(ee.List([img]));
 
   // Apply join to collection 2
   // Resulting collection will have 1 image with exact same date as img
-  var join = simpleJoin.apply(mod2join, temp, filter);
+  var join = simpleJoin.apply(mod1join, temp, filter);
 
   // Get resulting image
   var i2 = ee.Image(join.first())
@@ -60,7 +60,7 @@ var final_col = mod1join.map(function(img){
   return img.addBands(i2)
 })
 
-print(final_col.first())
+print('final_col', final_col.first())
 
 ////////// SCA Map ////////////
 
@@ -216,4 +216,24 @@ for (var i = 0; i < 3; i++) {
  
 // add legend to map (alternatively you can also print the legend to the console)
 Map.add(legend);
+
+
+///
+
+var NDSIimg = snowmapdate.select('NDSI_Snow_Cover').first()
+print(NDSIimg)
+
+/*var total = snowmapInnlandetcluster.first().reduceRegion({
+    reducer: ee.Reducer.count(), 
+    geometry: Innlandet, 
+    scale: 30,
+    maxPixels: 200000000,
+  });
+  
+
+//print(total) */
+print(snowmapInnlandetcluster)
+
+
+
   
