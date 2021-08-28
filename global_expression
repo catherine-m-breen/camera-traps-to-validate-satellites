@@ -1,2 +1,80 @@
-## This file provides the global expression for converting Collection 6 MODIS NDSI Snow Cover to a binary Snow Covered Area (SCA)
+// This file provides the global expression for converting Collection 6 MODIS NDSI Snow Cover to a binary Snow Covered Area (SCA)
 
+//
+
+/// Put in your own geometry, and then replace/delete the var geometry in line 8
+//var geometry = [YOUR OWN GEOMETRY HERE] 
+
+var geometry =
+  /* color: #d63000 */
+    /* shown: false */
+    ee.Geometry.Polygon(
+        [[[11.460955859374987, 60.611548923543275],
+          [12.087176562499987, 60.41145339155949],
+          [12.625506640624987, 60.54678843711464],
+          [12.416766406249987, 60.93874631934527],
+          [12.740275020404779, 61.029216241573465],
+          [12.735369921874987, 61.17269004771807],
+          [12.076190234374987, 61.57795147913667],
+          [10.933612109374987, 61.225618493844735]]]),
+
+/* this is what the developers wrote at the G4G conference
+they wrote it for landsat but i am going to comment it out and make it for MODIS instead
+*/
+
+// Import a terra/MODIS image 
+var terraNDSI = ee.ImageCollection("MODIS/006/MOD10A1")
+                .filter(ee.Filter.date('2018-03-29'))
+                .select(['NDSI_Snow_Cover'])
+                .map(function(image){return image.clip(geometry)})
+                .first()
+                
+
+var Vis = {
+  min: 0.0,
+  max: 100.0,
+  palette: ['black', '0dffff', '0524ff', 'ffffff'],
+};
+Map.addLayer(terraNDSI,Vis,'terra NDSI') 
+
+var terraNDVI = ee.ImageCollection('MODIS/MOD09GA_006_NDVI')
+                .filter(ee.Filter.date('2018-03-29'))
+                .select('NDVI')
+                .map(function(image){return image.clip(geometry)})
+                .first()
+                
+
+var colorizedVis = {
+  min: 0.0,
+  max: 1.0,
+  palette: [
+    'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718', '74A901',
+    '66A000', '529400', '3E8601', '207401', '056201', '004C00', '023B01',
+    '012E01', '011D01', '011301'
+  ],
+};
+
+Map.addLayer(terraNDVI, colorizedVis, 'terraNDVI');
+
+// MODIS image with both NDVI and NDSI bands
+// divide NDSI by 100 to make it fractional for the expression
+
+var Vis_index = {
+  min: 0.0,
+  max: 1.0,
+  palette: ['black', '0dffff', '0524ff', 'ffffff'],
+};
+
+var terraNDSI_NDVI = terraNDSI.divide(100).addBands([terraNDVI])
+print(terraNDSI_NDVI)
+Map.addLayer(terraNDSI_NDVI.select('NDVI'), colorizedVis, 'terraNDVI');
+Map.addLayer(terraNDSI_NDVI.select('NDSI_Snow_Cover'), Vis_index, 'terraNDSI');
+
+// snow map classification from G4G conference
+var classified = terraNDSI_NDVI.expression(
+  "(b('NDSI_Snow_Cover') >= 0.4) ? 1" +
+  ": (b('NDSI_Snow_Cover') >= 0.1) && (b('NDVI') >= (-0.5 * b('NDSI_Snow_Cover') + 0.3)) && (b('NDVI') <= (-4.5 * b('NDSI_Snow_Cover')**2 + 4.75 * b('NDSI_Snow_Cover') - 0.18)) ? 2" +
+  ": 3"
+)//.clip(terraNDSI_NDVI.geometry())
+
+Map.addLayer(classified,{min:1,max:3}, "classified")
