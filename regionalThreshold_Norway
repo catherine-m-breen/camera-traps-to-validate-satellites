@@ -1,0 +1,64 @@
+//// can fill in threshold that you want, and the date
+// will create a binary image 
+
+var Innlandet = 
+    /* color: #d63000 */
+    /* shown: false */
+    ee.Geometry.Polygon(
+        [[[11.460955859374987, 60.611548923543275],
+          [12.087176562499987, 60.41145339155949],
+          [12.625506640624987, 60.54678843711464],
+          [12.416766406249987, 60.93874631934527],
+          [12.740275020404779, 61.029216241573465],
+          [12.735369921874987, 61.17269004771807],
+          [12.076190234374987, 61.57795147913667],
+          [10.933612109374987, 61.225618493844735]]]);
+
+
+var thresholdVal = 9.73 // [FILL IN HERE]
+var date = '2018-03-29' //[FILL IN HERE]
+
+var terraNDSI = ee.ImageCollection("MODIS/006/MOD10A1")
+  .select(['NDSI_Snow_Cover'])
+  .filter(ee.Filter.date(date , '2020-06-30')) //2018-01-01 for final
+  .map(function(image){return image.clip(Innlandet)})
+
+var Vis = {
+  min: 0.0,
+  max: 100.0,
+  palette: ['black', '0dffff', '0524ff', 'ffffff'],
+};
+
+Map.addLayer(terraNDSI.first(),Vis,'terra NDSI')
+
+var snowBinary = terraNDSI
+            .map(function(img){
+            var snow0 = img.select('NDSI_Snow_Cover').gte(0)
+            .and(img.select('NDSI_Snow_Cover').lt(thresholdVal))
+            .remap([1],[0])
+            var snow1 = img.gte(thresholdVal)
+            .remap([1],[1])
+            return img.addBands(ee.ImageCollection([snow0.byte(),snow1.byte()]).mosaic())
+            })
+
+var Innlandetmap = snowBinary.map(function(image){return image.clip(Innlandet)})
+
+Map.setCenter(11.9924, 61.2108);
+Map.addLayer(Innlandetmap.first(), {min:0,max:1}, 'binary')
+
+//// zonal statistics
+
+var histogram = Innlandetmap.first().reduceRegion({
+        reducer: ee.Reducer.frequencyHistogram().unweighted(),
+        geometry: Innlandet,
+        scale: 30,
+        maxPixels: 20000000,
+});
+
+print('histogram',histogram)
+/* to find the % snow pixels take the number of pixels for snow (1) and divide it by the 
+total number of pixels (number of pixels for class 0 and class 1), excluding the null values. We exclude the null values because
+we don't know whether they are snow or snow. 
+*/
+
+
