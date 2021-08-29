@@ -1,4 +1,5 @@
 // This file provides the global expression for converting Collection 6 MODIS NDSI Snow Cover to a binary Snow Covered Area (SCA)
+// It currently takes both no snow and masked pixels and sets them equal to 3 so it will be inflated for no snow values. 
 
 //
 
