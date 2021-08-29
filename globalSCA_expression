@@ -25,7 +25,7 @@ they wrote it for landsat but i am going to comment it out and make it for MODIS
 
 // Import a terra/MODIS image 
 var terraNDSI = ee.ImageCollection("MODIS/006/MOD10A1")
-                .filter(ee.Filter.date('2018-03-29'))
+                .filter(ee.Filter.date('2018-05-05'))
                 .select(['NDSI_Snow_Cover'])
                 .map(function(image){return image.clip(geometry)})
                 .first()
@@ -68,14 +68,36 @@ var Vis_index = {
 
 var terraNDSI_NDVI = terraNDSI.divide(100).addBands([terraNDVI])
 print(terraNDSI_NDVI)
+
 Map.addLayer(terraNDSI_NDVI.select('NDVI'), colorizedVis, 'terraNDVI');
 Map.addLayer(terraNDSI_NDVI.select('NDSI_Snow_Cover'), Vis_index, 'terraNDSI');
 
 // snow map classification from G4G conference
 var classified = terraNDSI_NDVI.expression(
-  "(b('NDSI_Snow_Cover') >= 0.4) ? 1" +
+  "(b('NDSI_Snow_Cover') >= 0.0) && (b('NDSI_Snow_Cover') < 0.1) ? 0" +
+  ": (b('NDSI_Snow_Cover') >= 0.4) ? 1" +
   ": (b('NDSI_Snow_Cover') >= 0.1) && (b('NDVI') >= (-0.5 * b('NDSI_Snow_Cover') + 0.3)) && (b('NDVI') <= (-4.5 * b('NDSI_Snow_Cover')**2 + 4.75 * b('NDSI_Snow_Cover') - 0.18)) ? 2" +
   ": 3"
 ).clip(geometry)
 
-Map.addLayer(classified,{min:1,max:3}, "classified")
+Map.setCenter(11.9924, 61.2108);
+Map.addLayer(classified,{min:0,max:3}, "classified")
+//Map.addLayer(classified.float())
+
+
+///// Visualization & Testing ///
+
+////////////////
+/* calculate the  the different snow covered areas
+*/
+
+print('classified',classified)
+var total = classified.reduceRegion({
+        reducer: ee.Reducer.frequencyHistogram().unweighted(),
+        geometry: geometry,
+        scale: 30,
+        maxPixels: 20000000,
+});
+
+print(total)
+
