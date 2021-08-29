@@ -22,10 +22,12 @@ var geometry = /* color: #d63000 */ee.Geometry.MultiPoint(
           [12.076190234374987, 61.57795147913667],
           [10.933612109374987, 61.225618493844735]]]);
 
+
 /// binary snow map 
 
 var table = ee.FeatureCollection("users/catherinembreen/ScandCam_AllCameras_05072020_XYTableToPoint"),
     geometry = /* color: #d63000 */ee.Geometry.MultiPoint();
+
 
 
 /* Extract a TimeSeries from both the Terra and 
@@ -86,7 +88,16 @@ print('final_col', final_col.first())
 var snowmask = function(img){
     // snow = all pixels where NDSI > 0.4 is snow
   var snow0 = img.select('NDSI_Snow_Cover').gte(0)
-  .and(img.select('NDSI_Snow_Cover').lt(10)).remap([1],[0])
+  .and(img.select('NDSI_Snow_Cover').lt(40))
+  .and(img.select('NDVI').lt(img.expression(
+    '-0.5 * (NDSI)/100 + 0.3',{
+    'NDSI': img.select('NDSI_Snow_Cover')
+  })))
+ .or(img.select('NDVI').gt(img.expression (
+  '(-4.5) * (NDSI)/100 * (NDSI)/100 + 4.75 * (NDSI)/100 - 0.18',{
+    'NDSI': img.select('NDSI_Snow_Cover')
+  }))) 
+  .remap([1],[0])
   var snow1 = img.select('NDSI_Snow_Cover').gte(40).remap([1],[1])//.rename('snow1') //.remap([0],[1]) 
   var snow2 = img.select('NDSI_Snow_Cover').gte(10)
      .and(img.select('NDSI_Snow_Cover').lt(40))
@@ -109,15 +120,12 @@ var snowmask = function(img){
 
 var snowmap = final_col.map(snowmask) // this has all the data!!
 
-
-
 var snowmapdate = snowmap.filter(ee.Filter.date('2018-11-20')) // could update date here
-print('snowmapdate', snowmapdate)
+
+print(snowmapdate)
 
 //// clip to just one cluster
-
 var snowmapInnlandetcluster = snowmapdate.map(function(image){return image.clip(Innlandet)})
-print('innlandet info', snowmapInnlandetcluster)
 
 ///// Visualization & Testing ///
 
@@ -137,7 +145,6 @@ var colorizedVis = {
     '012E01', '011D01', '011301'
   ],
 };
-
 
 Map.setCenter(11.9924, 61.2108);
 Map.addLayer(snowmapdate.select('NDSI_Snow_Cover').first(),Vis1,'Innlandet NDSI')
@@ -255,4 +262,5 @@ print('pixel count breakdown',snowmapdate.first().reduceRegion({
   geometry: Innlandet,
   maxPixels: 1e9
 }));
+
 
