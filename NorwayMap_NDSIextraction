@@ -1,0 +1,254 @@
+
+
+/* October 21, 2020
+
+Extract the MODIS NDSI and Landsat NDSI for all the camera trap locations.
+Some of these will need to be filtered out because there may not actually 
+be a value there, but we want to keep them for now. 
+
+MODIS NDSI is preprocessed. All dates were extracted, except only dates
+of interest were explored. 
+LANDSAT NDSI was calculated using a normalized difference index, 
+with a cloud mask just in case there is a still a cloud day. 
+
+*/
+
+var table = ee.FeatureCollection("users/catherinembreen/ScandCam_AllCameras_05072020_XYTableToPoint");
+
+// map all the points over their unique ID
+// this is feature collection
+var points = table.map(function(feature) {
+  return ee.Feature(feature.geometry(), {'LokalitetID': feature.id()})
+})
+
+
+print(points)
+
+//var featureList = points.map(function(geom) {
+    // Return a feature representation of the geometry.
+    // 
+  //  return ee.Feature(ee.Geometry(geom))})
+//print(featureList)
+
+///////////////////////////////////////
+
+var CameraID = 'LokalitetID' // ****update here with column name of Camera #
+var locTable = table // ***update here with table of locations and whatever else
+
+//////////////////////////// DATA PROCESSING /////////////////////////////
+
+// 1) Turn the location table (locs) into a feature collection, neccessary for ui.Chart input
+  // Make feature collection a list and map over the elements (features)
+var allCameraList = locTable.toList(table.size()).map(function(feature) {
+  // Cast the input as a feature since it is coming from a list, get its
+  // geometry, then split geometries into a list.
+  var cameraID = ee.Feature(feature).get('LokalitetID')
+  var geomList = ee.Feature(feature).geometry().geometries(); //ee.Feature(feature)
+  // Map over the geometry list.
+  var featureList = geomList.map(function(geom) {
+    // Return a feature representation of the geometry.
+    return ee.Feature(ee.Geometry(geom))
+  })
+  var cameraIDlist = featureList.map(function(index){
+    return ee.Feature(index).set('LokalitetID',cameraID)
+  })
+  // Return a list of all the features making up a potential multi-geometry,
+  // this is a list. 
+  return cameraIDlist // featureList;
+})
+// The result is a list of feature lists - flatten to a single list of features.
+.flatten();
+print('allCameraList',allCameraList)
+
+////////////////////////////////////
+
+var allCameras = ee.FeatureCollection(allCameraList);
+
+///////////////////////////////////////
+
+var terraCollection = ee.ImageCollection("MODIS/006/MOD10A1")
+  .select(['NDSI_Snow_Cover'])
+  .filter(ee.Filter.date('2015-01-01', '2015-02-01'));
+print(terraCollection)
+
+var SnowCover = terraCollection.map(function(img){
+  return img.reduceRegions({
+      collection: allCameras.select('LokalitetID'),
+      reducer: ee.Reducer.mean(),
+      scale: 30
+  })
+});
+print(SnowCover)
+
+Export.table.toDrive({
+  collection: SnowCover,
+  //selectors: (["LokalitetID","mean"]),
+  folder: "GEE",
+  description: 'MODIS_NDSI_2015-2020_nov16', 
+  fileFormat: 'CSV'
+  });
+
+
+// visualization
+
+var norwayShape = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017')
+  .filter(ee.Filter.or(
+    ee.Filter.eq('country_na', 'Norway'), 
+    ee.Filter.eq('country_na', 'Sweden')))
+
+var dataset = ee.ImageCollection('MODIS/006/MOD10A1')
+                  .filter(ee.Filter.date('2018-01-01', '2018-11-15'))
+                  .map(function(image){return image.clip(norwayShape)})
+        
+var snowCover = dataset.select('NDSI_Snow_Cover');
+var snowCoverVis = {
+  min: 0.0,
+  max: 100.0,
+  palette: ['black', '0dffff', '0524ff', 'ffffff'],
+};
+Map.setCenter(10.17, 62.77, 3); 
+Map.addLayer(snowCover, snowCoverVis, 'Snow Cover');
+Map.addLayer(points)
+Map.centerObject(points, 5); 
+
+// set position of panel
+var legend = ui.Panel({
+style: {
+position: 'bottom-left',
+padding: '8px 15px'
+}
+});
+
+// Create legend title
+var legendTitle = ui.Label({
+value: 'MODIS Snow Cover',
+style: {
+fontWeight: 'bold',
+fontSize: '18px',
+margin: '0 0 4px 0',
+padding: '0'
+}
+});
+ 
+// Add the title to the panel
+legend.add(legendTitle);
+ 
+// create the legend image
+var lon = ee.Image.pixelLonLat().select('latitude');
+var gradient = lon.multiply((snowCoverVis.max-snowCoverVis.min)/100.0).add(snowCoverVis.min);
+var legendImage = gradient.visualize(snowCoverVis);
+ 
+// create text on top of legend
+var panel = ui.Panel({
+widgets: [
+ui.Label(snowCoverVis['max'])
+],
+});
+ 
+legend.add(panel);
+ 
+// create thumbnail from the image
+var thumbnail = ui.Thumbnail({
+image: legendImage,
+params: {bbox:'0,0,10,100', dimensions:'10x200'},
+style: {padding: '1px', position: 'bottom-center'}
+});
+ 
+// add the thumbnail to the legend
+legend.add(thumbnail);
+ 
+// create text on top of legend
+var panel = ui.Panel({
+widgets: [
+ui.Label(snowCoverVis['min'])
+],
+});
+ 
+legend.add(panel);
+ 
+Map.add(legend);
+
+/*
+
+/***
+ * Draws a scalebar
+
+var Scalebar = {
+  draw: function (pos, props) {
+    var scale = Map.getScale()
+    var units = 'km'
+    var steps = 5
+    var multiplier = 1000
+    var palette = ['000000', 'ffffff']
+    var format = '%.0f'
+    var round = true
+
+    if(props) {
+      scale = props.scale || scale
+      units = props.units || units
+      steps = props.steps || steps
+      multiplier = props.multiplier || multiplier
+      palette = props.palette || palette
+      format = props.format || format
+      round = props.round !== 'undefined' ? props.round : round
+    }
+
+    var p = ee.Number(Map.getScale()).divide(ee.Image().projection().nominalScale())
+    var pt0 = ee.List(pos.coordinates().get(0))
+    var pt1 = ee.List(pos.coordinates().get(1))
+
+    // scalebar
+    var bounds = pos.buffer(Map.getScale() * 2).bounds()
+    var ll = ee.List(ee.List(bounds.coordinates().get(0)).get(0))
+    var ur = ee.List(ee.List(bounds.coordinates().get(0)).get(2))
+    var width = ee.Number(ur.get(0)).subtract(ll.get(0))
+    var height = ee.Number(ur.get(1)).subtract(ll.get(1))
+
+    var origin = ee.Image.constant(ll.get(0)).addBands(ee.Image.constant(ll.get(1)))
+
+    var scalebar = ee.Image.pixelLonLat()
+      .subtract(origin)
+      .divide([width, height]).multiply([steps, 1])
+      .toInt().reduce(ee.Reducer.sum()).bitwiseAnd(1)
+      .clip(bounds)
+
+    // units
+    var point = translate(pt1, p.multiply(-8), p.multiply(-7))
+    var imageUnits = Text.draw(units, ee.Geometry.Point(point), scale, {
+      fontSize:18, textColor: '000000', outlineColor: 'ffffff', outlineWidth: 2.5, outlineOpacity: 0.6})
+
+    // define base images
+    var images = ee.List([
+      scalebar.visualize({min:0, max:1, forceRgbOutput: true, palette: palette}),
+      ee.Image().paint(bounds, 1, 1).visualize({palette:['000000']}),
+      imageUnits,
+    ])
+
+    // add labels
+    var boundsMeters = bounds.transform(ee.Projection('EPSG:3857'), ee.ErrorMargin(1))
+    var ll = ee.List(ee.List(boundsMeters.coordinates().get(0)).get(0))
+    var ur = ee.List(ee.List(boundsMeters.coordinates().get(0)).get(2))
+    var widthTargetUnits = ee.Number(ur.get(0)).subtract(ee.Number(ll.get(0))).divide(100).floor().multiply(100)
+
+    for(var i=0; i<steps+1; i++) {
+      var markerText = widthTargetUnits.divide(steps * multiplier).multiply(i).format(format)
+
+      var point = translate(
+        pt0, 
+        width.divide(steps).multiply(i).multiply(-1).add(p.multiply(10)), 
+        p.multiply(-20)
+      )
+
+      var imageLabel = Text.draw(markerText, ee.Geometry.Point(point), scale, {
+        fontSize:18, textColor: '000000', outlineColor: 'ffffff', outlineWidth: 2.5, outlineOpacity: 0.6})
+
+      images = images.add(imageLabel)
+    }
+
+    return ee.ImageCollection.fromImages(images).mosaic()
+  },
+}
+
+
+*/
+
