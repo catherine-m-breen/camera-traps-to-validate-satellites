@@ -1,0 +1,67 @@
+
+var norwayShape = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017')
+  .filter(ee.Filter.or(
+    ee.Filter.eq('country_na', 'Sweden'),
+    /*ee.Filter.eq('country_na', 'Norway'), */
+    ee.Filter.eq('country_na', 'Sweden')))
+
+var dataset = ee.ImageCollection('MODIS/006/MOD10A1')
+                  .filter(ee.Filter.date('2019-01-01', '2019-12-31'))
+                  .map(function(image){return image.clip(norwayShape)})
+        
+var snowCover = dataset.select('NDSI_Snow_Cover');
+
+var snowCoverVis = {
+  min: 0.0,
+  max: 100.0,
+  palette: ['black', '0dffff', '0524ff', 'ffffff'],
+};
+Map.setCenter(10.17, 62.77, 3); 
+Map.addLayer(snowCover, snowCoverVis, 'Snow Cover');
+
+// Export image 
+// image to export: snowCover
+
+// need to clip to norwayShape again because it needs the rectange bounding box
+
+// reduce snowCover to a mean to get a pretty snowmap 
+
+var snowCoverMap = snowCover.reduce(ee.Reducer.mean());
+Map.addLayer(snowCover, snowCoverVis, 'Snow Cover Map for Arc');
+
+//may also need to convert snowCover to 8-bit rather than float or whatever
+// help on exporting: https://gis.stackexchange.com/questions/312324/using-image-exporttodrive-in-google-earth-engine
+
+Export.image.toDrive({
+  image: snowCoverMap.clipToCollection(norwayShape), 
+  description: 'snowCover_Sweden_map_500', 
+  region: ee.Feature(norwayShape.first()).bounds(),  
+  fileFormat: 'GeoTIFF', 
+  scale: 500,
+  maxPixels: 200000000000,
+   formatOptions: {  
+    cloudOptimized: true  
+  },
+  skipEmptyTiles: true
+  });
+
+// This one converts it to 0-255 instead of 0-100; it also takes 5hours.
+// norway projection : https://epsg.io/5939
+/*
+var toBytes = snowCoverMap.add(1).multiply(122.5).toByte();
+Export.image.toDrive({
+  image: toBytes.clipToCollection(norwayShape), 
+  description: 'snowCover_NorwaySweden_mapBytes', 
+  region: ee.Feature(norwayShape.first()).bounds(),  
+  fileFormat: 'GeoTIFF', 
+  scale: 30,
+  crs: 'EPSG:5939',
+  maxPixels: 200000000000,
+   formatOptions: {  
+    cloudOptimized: true  
+  },
+  });
+
+*/
+
+
