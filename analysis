@@ -34,6 +34,8 @@ Code to analyze MODIS NDSI and Snow detected from Camera Trap images.
   - see if it increases are decreases the accuracy for MODIS 
   Note: this is in Google Earth Engine, not in python. 
   - Visualization -- not necessary (except for maybe a poster or a presentation, so could have one handy and then save it as a figure) . The output will be the range in snow covered area. From XX% to XX%. The one using the Appel and Salmonson product. And then a correlation between landsat scene at modis with 1) Appel and Salomonson 2) lower end of SCA and 3) upper end of SCA. Maybe just do 1 landsat scene. Say that there is a caveat that this could be done at multiple times of year, and that more work is needed to understand how these different thresholds can be incorporated into one another.
+
+### **Loading Libraries**
 """
 
 import pandas as pd
@@ -44,6 +46,10 @@ drive.mount('/content/drive')
 
 pip install git+https://github.com/statsmodels/statsmodels
 
+pip install mord
+
+pip install suntime
+
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -52,21 +58,31 @@ import statsmodels.api as sm
 from statsmodels.formula.api import logit
 
 import numpy as np
+
 import pandas as pd
 import scipy.stats as stats
 
 from statsmodels.miscmodels.ordinal_model import OrderedModel
 
+import datetime
+from suntime import Sun, SunTimeException
+
+"""### **Loading Files**"""
+
 ## upload all the camera data & Remote Sensing Data
 path = r'drive/My Drive/SnowAndWeatherLabeling/Processed_ddbs_and_CSVs/CSVs'                     # use your path
-all_files = glob.glob(os.path.join(path, "*.csv")) 
-rawCameraData = pd.concat(map(pd.read_csv, all_files)) ## pd.concat is bad at datetime so you have to save it and then 
-rawCameraData.to_csv('drive/My Drive/CBRE/Analysis/labels.csv')
+all_files = glob.glob(os.path.join(path, "*.csv"))  #### there were some files that were excel
+fullData_glob2 = pd.concat(map(pd.read_csv, all_files)) ## pd.concat is bad at datetime so you have to save it and then 
+fullData_glob2.to_csv('drive/My Drive/CBRE/Analysis/fullData_glob2.csv')
 
-rawCameraData = pd.read_csv('drive/My Drive/CBRE/Analysis/fullData_glob2.csv')
+rawCameraData = pd.read_csv('drive/My Drive/CBRE/Analysis/fullData_glob2.csv') #### this needed to be updated
 RemoteSensingData = pd.read_csv('drive/My Drive/CBRE/Analysis/MODIS_allCameras_Jan18-Apr20.csv')
 ## maybe try it with datesearchMODIS.csv ## which is the file that I used on the original match
 RemoteSensingData_nonNull = pd.read_csv('drive/My Drive/CBRE/Analysis/dateSearchMODIS.csv')
+
+LatLongtable = pd.read_csv('drive/My Drive/CBRE/Analysis/All_ScandCam_AmericanDecimalPoint.csv')
+LatLongtable = LatLongtable[['LokalitetID','Latitude','Longitude']]
+dayOfWinterSeasonTable = pd.read_csv('drive/My Drive/CBRE/Analysis/dayOfWinterSeason.csv')
 
 #pd.read_csv('drive/My Drive/CBRE/Analysis/MODIS_allCameras_Oct19-Apr20.csv')
 
@@ -88,17 +104,30 @@ columnNames = ['File', 'Folder', 'RelativePath', 'Date', 'Time',
 ## is -2hours from Norway time. Therefore, at most the images could be different in time by 
 ## 30 hours or as little as 6 hours. 
 
-RemoteSensingData_nonNull.head()
-RemoteSensingData_nonNull.loc[RemoteSensingData_nonNull["LokalitetID"] == int('1158')][0:15]
+#RemoteSensingData_nonNull.head()
+#timeChange1158satellite = RemoteSensingData_nonNull.loc[RemoteSensingData_nonNull["LokalitetID"] == int('1158')]
+#timeChangeCheck = cameraLabelingCleanUp(rawCameraData)
+#timeChange1158camera = timeChangeCheck.loc[timeChangeCheck['LokalitetID'] == int('1158')]
+#timeChange1158satellite.to_csv('drive/My Drive/CBRE/Analysis/timeChange1158satellite.csv')
+#timeChange1158camera.to_csv('drive/My Drive/CBRE/Analysis/timeChange1158camera.csv')
+#RSdata.to_csv('drive/My Drive/CBRE/Analysis/RSdata.csv')
+
+"""### **Amount of MODIS Null Values**"""
 
 print(len(RemoteSensingData))
 z = RemoteSensingData['mean'][1] ## looking at nulls
 
 a = np.array(RemoteSensingData['mean'])
 a[~np.isnan(a)]
-len(a[~np.isnan(a)])
+print(len(a[~np.isnan(a)]))
 
 392453/1703702 ## 23% is not-null
+
+
+
+
+
+"""### **Data Cleaning Functions**"""
 
 ### function to clean up the camera trap images
 ##### Dataframe Processing for Camera Traps: 
@@ -110,22 +139,18 @@ len(a[~np.isnan(a)])
     # test (8/2): reset index                        X note: this is because we want it to be its own data frame
     # check if there are missing dates and insert a NaN??
     # drop duplicates in the practice folder -- keep only Katie Breen labeled 
-
+    
 def cameraLabelingCleanUp(df):
   df = df[columnNames] ## to clean up the index columns
   rowsToDrop = df[df['Folder'] == '2018_practice'][df['Analyst'] != 'Katie Breen'] ## keep only Katie Breen for the practice
   df = df.drop(rowsToDrop.index)
-  df = df.drop_duplicates(subset=['File'], keep='last') ## drop any remaining duplicates
+  #df['Date'] = d
+  #df = df.drop_duplicates(subset=['File'], keep='last') ## drop any remaining duplicates; why drop last? i guess in case someone labeled it twice? 
   df['Date'] = pd.to_datetime(df['Date']) 
   CameraID = df["File"].str.split("_", n = 1, expand = True) 
   df['LokalitetID'] = CameraID[0].astype(int)
   SnowCover = np.array(df['SnowCover'])
   df = df[~np.isnan(SnowCover)]
-  #clean1 = df[df['Time'] == '8:00:00']
-  #clean2 = df[df['Time'] == '0:00:00']
-  #clean3 = df[df['Time'] == '08:00:00']
-  #df1 = clean1.append(clean2)
-  #df = df1.append(clean3)
   df = df.reset_index(drop=True) ## test as of 8/2 ## needs to be last for the index stuff
   return df
 # df = df['Date'] = pd.to_datetime(df['Date'])
@@ -137,17 +162,12 @@ def timechange(df):
   df = df[columnNames] ## to clean up the index columns
   rowsToDrop = df[df['Folder'] == '2018_practice'][df['Analyst'] != 'Katie Breen'] ## keep only Katie Breen for the practice
   df = df.drop(rowsToDrop.index)
-  df = df.drop_duplicates(subset=['File'], keep='last') ## drop any remaining duplicates
+  #df = df.drop_duplicates(subset=['File'], keep='last') ## drop any remaining duplicates
   df['Date'] = pd.to_datetime(df['Date']) 
   CameraID = df["File"].str.split("_", n = 1, expand = True) 
   df['LokalitetID'] = CameraID[0].astype(int)
   SnowCover = np.array(df['SnowCover'])
   df = df[~np.isnan(SnowCover)]
-  #clean1 = df[df['Time'] == '8:00:00']
-  #clean2 = df[df['Time'] == '0:00:00']
-  #clean3 = df[df['Time'] == '08:00:00']
-  #df1 = clean1.append(clean2)
-  #df = df1.append(clean3)
   df = df.reset_index(drop=True) 
 
 ### adjust for time change; WA and Oslo are 9 hours apart
@@ -203,13 +223,19 @@ def MODISSnowCoverCleanUp(df):
 RSdata = MODISSnowCoverCleanUp(df=RemoteSensingData)
 print(len(RSdata))
 
-print(RSdata['date'][1])
-#print(CameraData['Date'][1])
+def dropSecondOpinionAndPoorQuality(df):
+    ## drop second opinion 
+  SecondOpinionToDrop = df[df['SecondOpinion'] == True]
+  df = df.drop(SecondOpinionToDrop.index)
+  PoorQuality = df[df['PoorQualilty'] == True] ## quality has a typo but that's OK
+  df = df.drop(PoorQuality.index)
+  return df
 
 ## covariates (could add more)
 treecanopyRaw = pd.read_csv('drive/My Drive/CBRE/Analysis/2015treecanopy_allCameras.csv') ## look up resolution
 landcoverRaw = pd.read_csv('drive/My Drive/CBRE/Analysis/MODISlandcover2020_allCameras.csv')
-NDVImodisRaw = pd.read_csv('drive/My Drive/CBRE/Analysis/NDVIModisdaily.csv')
+NDVImodisRaw = pd.read_csv('drive/My Drive/CBRE/Analysis/NDVIModisdaily.csv')  ###### need to check NDVImodisdaily; normal range 
+## is -2000 -> 1000. https://developers.google.com/earth-engine/datasets/catalog/MODIS_006_MOD13Q1#description 
 
 ### functions to clean up covariates
 ## feed in the covariates of interest
@@ -222,8 +248,8 @@ def landcoverClean(landcover):
 
 def treecanopyClean(treecanopy):
 ### treecanopy
-  treecanopy.rename(columns={'mean':'treecanopyheight'}, inplace=True)
-  treecanopy = treecanopy[['LokalitetID','treecanopyheight']] 
+  treecanopy.rename(columns={'mean':'treecanopycover'}, inplace=True)
+  treecanopy = treecanopy[['LokalitetID','treecanopycover']] 
   return treecanopy
 
 def NDVImodisClean(NDVImodis):
@@ -233,22 +259,194 @@ def NDVImodisClean(NDVImodis):
   NDVImodis = NDVImodis[['LokalitetID','date','NDVImodis']]
   return NDVImodis
 
-landcover = landcoverClean(landcover=landcoverRaw)
-treecanopy = treecanopyClean(treecanopy=treecanopyRaw)
-NDVImodis = NDVImodisClean(NDVImodis = NDVImodisRaw)
+def monthOfYear(df): ### won't need to merge this, just run  it at some point in the data cleaning
+  df['Month'] = 0 ## dummy number to fill in the column  and have the same # of rows as df 
+  for i in range(0,len(df)):
+    df['Month'][i] = (df['Date'][i]).month
+  return df
 
-#print(landcover.head())
-#print(treecanopy.head())
-#print(NDVImodis.head())
+def snowPhase(df):
+ ## accumulation = 10-12
+ ## energy phase = 1-2
+ ## melt = 3 
+  df['snowPhase'] = 'empty'
+  #df['Month'] = (df['Month']).astype(int)
+ ## need to convert the months to integers when doing it  
+  start2 = pd.Timestamp('2018-09-30 00:00:00')
+  start3 = pd.Timestamp('2019-09-30 00:00:00')
+  enddate1 = pd.Timestamp('2018-04-01 00:00:00')
+  enddate2 = pd.Timestamp('2019-04-01 00:00:00')
+  acc1 = pd.Timestamp('2018-02-15 00:00:00')
+  acc2 = pd.Timestamp('2019-01-20 00:00:00')
+  acc3 = pd.Timestamp('2019-12-03 00:00:00')
+  melt1 = pd.Timestamp('2018-03-22 00:00:00')
+  melt2 = pd.Timestamp('2019-03-18 00:00:00')
+  melt3 = pd.Timestamp('2019-12-27 00:00:00')
+
+  for i in range(0,len(df)):
+    if (df['date'][i] <= acc1) | \
+    ((df['date'][i] > start2) & (df['date'][i] <= acc2)) | \
+    ((df['date'][i] > start3) & (df['date'][i] <= acc3)):
+      #((int(df['Month'][i]) == 9) or (int(df['Month'][i]) == 10) or ((df['Month'][i]) == 11) or (int(df['Month'][i]) == 12)):
+      df['snowPhase'][i] = 'fall' 
+
+    elif (df['date'][i] > acc1) & (df['date'][i] <= melt1) | \
+    (df['date'][i] > acc2) & (df['date'][i] <= melt2) | \
+    (df['date'][i] > acc3) & (df['date'][i] <= melt3): 
+      #(((int(df['Month'][i]) == 1) or int(df['Month'][i]) == 2)):
+      df['snowPhase'][i] = 'winter'
+      
+    else:
+        df['snowPhase'][i] = 'spring' ### this will be months 3 and 4 if those are included
+  return df 
+
+#def sunrise(df)::
+  ### add a variable that says it is before or after sunrise
+
+
+landcover = landcoverClean(landcover=landcoverRaw)
+treecanopy = treecanopyClean(treecanopy=treecanopyRaw) ## we actually just want this one!!! 
+NDVImodis = NDVImodisClean(NDVImodis = NDVImodisRaw)
 
 def mergeCovariates(landcover, treecanopy, NDVImodis):
   result = pd.merge(treecanopy, landcover, on = 'LokalitetID', how ='outer')
-  covariates = pd.merge(NDVImodis,result, on = 'LokalitetID', how='outer')
+  covariates = pd.merge(NDVImodis,result, on = 'LokalitetID', how='outer') ### need to include date here too!! 
   return covariates
 
 covariates = mergeCovariates(landcover, treecanopy, NDVImodis)
+## We are taking out NDVImodis because
 
-"""Now that all the data is imported and cleaned up (steps 1-3), we will now merge it all into one dataframe (step 4)
+## add a binomial column for binomial logistic regression
+## initiate the column. I am setting it to 0 because if it is set as empty, 
+## it makes everything objects. It is risky to make everything 0, but as long as 
+## you see some 1s, you know it worked. 
+
+def SnowBinomial(data):
+  data['SnowCoverBinomial_1'] = 0 #""
+  data['SnowCoverBinomial_2'] = 0 #""
+  data['SnowCoverBinomial_3'] = 0
+  data['SnowCoverBinomial_4'] = 0
+
+  for i in range(0, len(data['SnowCover'])):
+    if data['SnowCover'][i] >= 1: data['SnowCoverBinomial_1'][i] = 1.0
+    else: data['SnowCoverBinomial_1'][i] = 0.0
+
+  for i in range(0, len(data['SnowCover'])):
+    if data['SnowCover'][i] >= 2: data['SnowCoverBinomial_2'][i] = 1.0
+    else: data['SnowCoverBinomial_2'][i] = 0.0
+  
+  for i in range(0, len(data['SnowCover'])):
+    if data['SnowCover'][i] >= 3: data['SnowCoverBinomial_3'][i] = 1.0
+    else: data['SnowCoverBinomial_3'][i] = 0.0
+
+  for i in range(0, len(data['SnowCover'])):
+    if data['SnowCover'][i] >= 4: data['SnowCoverBinomial_4'][i] = 1.0
+    else: data['SnowCoverBinomial_4'][i] = 0.0
+
+  return data
+
+## print the differences in 1s in both options:
+#print(len(data[data['SnowCoverBinomial_1']== 1.0])) # 2083
+#print(len(data[data['SnowCoverBinomial_2']== 1.0])) # 2035
+
+def addDayOfWinterSeason(df, dayOfWinterSeasonTable):
+  date_dictionary = dict(zip(dayOfWinterSeasonTable['date'], dayOfWinterSeasonTable['day']))
+  df['dayOfWinterSeason'] = 1
+  for i in range(0, len(test['Date'])):
+    df['dayOfWinterSeason'][i] = date_dictionary[(test['Date'][i]).strftime('%-m/%-d/%y')]
+  return data
+
+#test = pd.read_csv('drive/My Drive/CBRE/Analysis/data_wCovariates_Sept15-2021.csv')
+
+test.to_csv('drive/My Drive/CBRE/Analysis/data_wCovariates_Sept15-2021_dayofWin.csv')
+
+test.head()
+
+
+
+def addLatLongtable(data, LatLongtable):
+  data = data.merge(LatLongtable, how = 'inner', left_on = ['LokalitetID'], right_on = ['LokalitetID'])
+  return data
+
+## adding a variable for sunrise since that seems to be a big factor to determining score
+## python documentation on it: https://pypi.org/project/suntimes/
+## the only issue is that Norway is in CET (UTC +1) Nov-March & CEST (UTC+2) Apr-Oct. 
+## More info on Norway clock changes & and time zones: https://www.timeanddate.com/time/zone/norway/oslo 
+
+
+#### it's kind of unclear whether the clocks automatically change with setting the clocks bacK? Maybe ask John? 
+#https://www.reconyx.com/img/file/HyperFire_2_User_Guide_2018_07_05_v5.pdf It looks they do. How do they know your location?
+
+
+def AddingSunriseInfo(data):
+  from datetime import date 
+
+  data['SunriseCET'] = pd.Timestamp('2000-01-01 00:00:00') ### bunch of empty columns
+  data['SunsetCET'] = pd.Timestamp('2000-01-01 00:00:00')
+  data['Day_or_Night'] = 'empty'
+
+  ### Get the Date
+  for i in range(0,len(data)):
+    dateFromTable = data['Date'][i] ## the date we are working with
+    dateString = dateFromTable.strftime('%Y/%m/%d')
+    dateList = dateString.split('/',3)
+    #print(dateList)
+    day = date(int(dateList[0]), int(dateList[1]), int(dateList[2])) ## have to convert each date to a datetime variable 
+    #print(day)
+    
+    ### coordinates 
+    sun = Sun(data['Latitude'][i], data['Longitude'][i])
+              ############### Central European Time ################
+    if (day.month == 1) or (day.month == 2) or (day.month == 3) or (day.month == 11) or (day.month == 12):
+      sunriseUTC = sun.get_local_sunrise_time(day).strftime('%Y-%m-%d %H:%M')
+      sunsetUTC = sun.get_local_sunset_time(day).strftime('%Y-%m-%d %H:%M')
+
+      ## also want to store sunriseCET
+      sunriseCET = pd.to_datetime(sunriseUTC) + pd.Timedelta(value = 1, unit = 'hour')   #.hour + 2 ## Central European Time
+      sunsetCET = pd.to_datetime(sunsetUTC) + pd.Timedelta(value = 1, unit = 'hour')
+      data['SunriseCET'][i] = sunriseCET
+      data['SunsetCET'][i] = sunsetCET
+
+      if (pd.to_datetime(data['Time'][i]).hour > sunriseCET.hour) and (pd.to_datetime(data['Time'][i]).hour < sunriseCET.hour) :
+        data['Sunrise'][i] = 'Day'
+      elif pd.to_datetime(data['Time'][i]).hour < sunriseCET.hour:
+        data['Sunrise'][i] = 'Before' # is False
+      elif pd.to_datetime(data['Time'][i]).hour == sunriseCET.hour:
+        if pd.to_datetime(data['Time'][i]).minute >= sunriseCET.minute:
+            data['Sunrise'][i] = 'After' # is False
+        else: 
+          data['Sunrise'][i] = 'Before'
+    
+        ############### Central European Summer Time ################
+    else:
+      sunriseUTC = sun.get_local_sunrise_time(day).strftime('%Y-%m-%d %H:%M')
+      sunsetUTC = sun.get_local_sunset_time(day).strftime('%Y-%m-%d %H:%M')
+
+      ## also want to store sunriseCET
+      sunriseCET = pd.to_datetime(sunriseUTC) + pd.Timedelta(value = 2, unit = 'hour')   #.hour + 2 ## Central European Time
+      sunsetCET = pd.to_datetime(sunsetUTC) + pd.Timedelta(value = 2, unit = 'hour')
+      data['SunriseCET'][i] = sunriseCET
+      data['SunsetCET'][i] = sunsetCET
+
+      if pd.to_datetime(data['Time'][1]).hour > sunriseCET.hour:
+        data['Sunrise'][i] = 'After'
+      elif pd.to_datetime(data['Time'][1]).hour < sunriseCET.hour:
+        data['Sunrise'][i] = 'Before' # is False
+      elif pd.to_datetime(data['Time'][1]).hour == sunriseCET.hour:
+        if pd.to_datetime(data['Time'][1]).minute >= sunriseCET.minute:
+            data['Sunrise'][i] = 'After' # is False
+        else: 
+          data['Sunrise'][i] = 'Before'
+
+  return data
+
+def dateFilter(data):
+  data = data[(data['date'] < '2018-04-01 00:00:00') | (data['date'] > '2018-10-01 00:00:00') & (data['date'] < '2019-04-01 00:00:00') | (data['date'] > '2019-10-01 00:00:00') & (data['date'] < '2020-04-01 00:00:00')]
+  data = data.reset_index()
+  return data ## sample 8918 for October 1 dates
+
+"""Now that all the data is imported and cleaned up (steps 1-3), we will now merge it all into one dataframe (step 4). There are couple other steps to cleaning that we wil do too. These additional steps include adding a month column, adding a snowPhase column, and filtering for dates.
+
 
 """
 
@@ -256,12 +454,17 @@ covariates = mergeCovariates(landcover, treecanopy, NDVImodis)
 ## merge the data (CameraData, RSdata, covariates)
 
 def allDataMerge(CameraData, RSdata, covariates, dateColumn):
-  #data = RSdata.merge(covariates,  how='inner', left_on = ['LokalitetID','date'], right_on=['LokalitetID','date'])
- # CameraData = CameraData.set_index(CameraData['Date'])
-  #data = data.set_index(RSdata['date'])
-  #CameraData = CameraData.set_index(CameraData['Date'])
   data = CameraData.merge(RSdata,  how='inner', left_on = ['LokalitetID', dateColumn], right_on=['LokalitetID','date'])
+  data = monthOfYear(df = data) # add month column
+  data = snowPhase(df = data) # add snowphase column
+  data = SnowBinomial(data = data) # add snow binomial 1 and 2 columns
+  data = addLatLongtable(data = data, LatLongtable = LatLongtable) ## add Lat & Long for sunrise shit
+  data = addDayOfWinterSeason(df = data, dayOfWinterSeasonTable):
+  #data = AddingSunriseInfo(data = data) ## adding sunrise time and whether it's before or after
+  
+  data = dateFilter(data = data)
   ## keep only columns of interest
+
   return data
 
 ######### Run the tree and the merge on rawCameraData#### 
@@ -277,23 +480,28 @@ def allDataMerge(CameraData, RSdata, covariates, dateColumn):
 
 ############################################################
 
-##Tree 1: no time zone change
-CameraData = cameraLabelingCleanUp(df=rawCameraData)
-  #A: time-lapse only 
-CameraData_timelapse1 = timelapseOnly(df = CameraData)
-print(len(CameraData_timelapse1))
-  #B: timelapse and others
-CameraData_timelapseAndOthers1 = timelapseAndOthers(cleanedData = CameraData)
-print(len(CameraData_timelapseAndOthers1))
+def sampleTree(rawCameraData):
+  ##Tree 1: no time zone change
+  CameraData = cameraLabelingCleanUp(df=rawCameraData)
+    #A: time-lapse only 
+  CameraData_timelapse1 = timelapseOnly(df = CameraData)
+  print(len(CameraData_timelapse1))
+    #B: timelapse and others
+  CameraData_timelapseAndOthers1 = timelapseAndOthers(cleanedData = CameraData)
+  print(len(CameraData_timelapseAndOthers1))
 
-##Tree 2: time zone change
-CameraData_timeChange = timechange(df=rawCameraData)
-  #A: time-lapse only 
-CameraData_timelapse2 = timelapseOnly(df = CameraData_timeChange)
-print(len(CameraData_timelapse2))
-  #B: timelapse and others
-CameraData_timelapseAndOthers2 = timelapseAndOthers(cleanedData = CameraData_timeChange)
-print(len(CameraData_timelapseAndOthers2))
+  ##Tree 2: time zone change
+  CameraData_timeChange = timechange(df=rawCameraData)
+    #A: time-lapse only 
+  CameraData_timelapse2 = timelapseOnly(df = CameraData_timeChange)
+  print(len(CameraData_timelapse2))
+    #B: timelapse and others
+  CameraData_timelapseAndOthers2 = timelapseAndOthers(cleanedData = CameraData_timeChange)
+  print(len(CameraData_timelapseAndOthers2))
+  return CameraData_timelapse1, CameraData_timelapse2,CameraData_timelapseAndOthers1, CameraData_timelapseAndOthers2
+#CameraData_timelapseAndOthers2.to_csv('drive/My Drive/CBRE/Analysis/CameraData_timelapseAndOthers2.csv')
+
+CameraData_timelapse1, CameraData_timelapse2,CameraData_timelapseAndOthers1, CameraData_timelapseAndOthers2 = sampleTree(rawCameraData)
 
 #### All 4 merges 
 CameraData_timelapse1_merge = allDataMerge(CameraData_timelapse1, RSdata, covariates, dateColumn = 'Date') # 2358
@@ -312,16 +520,16 @@ CameraData_timelapseAndOthers2_merge = allDataMerge(CameraData_timelapseAndOther
 def sampleSize(df1 , df2, df3, df4):
   df = df1.append(df2).append(df3).append(df4)
   data = df.drop(columns=['Date_timeChange'])
-  data = data.drop_duplicates(subset=['LokalitetID','date']) ## could make this fancier 
+  data = data.drop_duplicates(subset=['LokalitetID','date'], keep = "first") ## could make this fancier 
   data = data.reset_index(drop=True)
-  ## data['File'].unique()
   return data
 
 data = sampleSize(CameraData_timelapse1_merge, CameraData_timelapseAndOthers1_merge, CameraData_timelapse2_merge, CameraData_timelapseAndOthers2_merge)
 print(data)
-#length should be 3637
-
-
+# 4689 - sept 2, 2021
+# 9842 - Sept 6, 2021 this is without the nulls
+# 9512 - Sept 6, 2021 -- this is with the second opinion button! 
+#8918 - Sept 7, 2021
 
 #print(RSdata[RSdata['LokalitetID'] == int('1119')][RSdata['date'] == '2019-01-31'])
 #print(RemoteSensingData[RemoteSensingData['LokalitetID'] == int('1119')][RemoteSensingData['date'] == '2019-01-31'])
@@ -329,39 +537,24 @@ print(data)
 ## so some photos were sorted, but there were NaN values in the table 
 ## Weaknesses: more sample size is needed
 
-data[data['date'] == '2019-01-29']
+### merge w Covariates 
+## Regression
+### would first need to add the covariates. 
 
-##how many snow pictures would i need to label ?? 
-## I think you would have to rerun the sort and match it with the data table where MODIS is non-null.
+## covariates are stored here: covariates
+
+#data_wCovariates_check = data.merge(covariates, on = 'LokalitetID', how='outer')
+data_wCovariates = data.merge(treecanopy, left_on = ['LokalitetID'], right_on = ['LokalitetID'], how='inner')
+data_wCovariates
 
 ### save this ##
-#data.to_csv('drive/My Drive/CBRE/Analysis/mergedData_allDataAug30.csv')
+data.to_csv('drive/My Drive/CBRE/Analysis/mergedData_allDataSept15.csv')
+#data_woJamesZeros.to_csv('drive/My Drive/CBRE/Analysis/mergedData_allDataAug30_woJames.csv')
 
-## add a binomial column for binomial logistic regression
-## initiate the column. I am setting it to 0 because if it is set as empty, 
-## it makes everything objects. It is risky to make everything 0, but as long as 
-## you see some 1s, you know it worked. 
+#data.to_csv('drive/My Drive/CBRE/Analysis/data_Sept6-2021.csv')
+ data_wCovariates.to_csv('drive/My Drive/CBRE/Analysis/data_wCovariates_Sept15-2021.csv')
 
-data['SnowCoverBinomial_1'] = 0 #""
-data['SnowCoverBinomial_2'] = 0 #""
- 
-
-for i in range(0, len(data['SnowCover'])):
-  if data['SnowCover'][i] >= 1: data['SnowCoverBinomial_1'][i] = 1.0
-  else: data['SnowCoverBinomial_1'][i] = 0.0
-
-for i in range(0, len(data['SnowCover'])):
-  if data['SnowCover'][i] >= 2: data['SnowCoverBinomial_2'][i] = 1.0
-  else: data['SnowCoverBinomial_2'][i] = 0.0
-
-
-print(data)
-#data.to_csv('drive/My Drive/CBRE/Analysis/mergedData_allData_timeZone.csv') ### this is what we want to work with in R
-
-
-## print the differences in 1s in both options:
-print(len(data[data['SnowCoverBinomial_1']== 1.0])) # 2083
-print(len(data[data['SnowCoverBinomial_2']== 1.0])) # 2035
+"""### **Data Exploration and Basic Summary**"""
 
 ## so this final data frame looks good, except that James labeled a lot of 0s 
 ## when they should actually be 1s, 2s, 3s, or 4s. We will drop those, because 
@@ -369,8 +562,9 @@ print(len(data[data['SnowCoverBinomial_2']== 1.0])) # 2035
 
 data_woJamesZeros = data[~((data['Analyst'] == 'James Swartwood') & (data['SnowCover'] == 0.0))]
 #data_woJamesZeros
+data_woPoorSecOpin = dropSecondOpinionAndPoorQuality(df = data)
 
-### check for normality
+#### check for normality
 
 plt.hist(data['NDSImodis'])
 print(plt.show())
@@ -378,144 +572,16 @@ print(plt.show())
 plt.hist(data['SnowCover'])
 print(plt.show())
 
-plt.hist(data_woJamesZeros['SnowCover'])
-print(plt.show())
+#plt.hist(data_woJamesZeros['SnowCover'])
+#print(plt.show())
 
+plt.hist(data_woPoorSecOpin['SnowCover'])
 ## conclusion: data is non-normal
-
-def linearRegressionPlot(data):
-  data.columns ## column names
-### basic plot 
-# basic plot 
-## Scatter plot on Result5 
-  fig = plt.figure(figsize=(12,5))
-  ax = fig.add_axes([0.1, 0.1, 0.8, 0.8]) # main axes, i am not sure what these numbers do, but it works when they are together 
-  plt.scatter(data['SnowCover'],data['NDSImodis']) 
-  ax.set_xticks([0,1,2,3,4])
-  ax.set_yticks([0,20,40,60,80,100])
-  ax.set_ylabel('MODIS NDSI Snow Cover')
-  ax.set_xlabel('Snow Classification')
-  ## add line of best fit
-
-  ## do statistical correlation 
-  ## Because this violates the law of normality, we will do an ordinal linear regression test
-
-  return plt.show() #, statistical test
-
-plot1 = linearRegressionPlot(data)
-plot2 = linearRegressionPlot(data_woJamesZeros) ## night time labeling is really hard
-
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-def seabornPlot(data):
-  sns.set(style="white")
-  ax = sns.boxplot(x='SnowCover', y='NDSImodis', data=data, showfliers = False)
-  ax = sns.stripplot(x='SnowCover', y='NDSImodis', data=data, color=".40")
-  sns.set(rc={'figure.figsize':(10,5)})
-  # Set x-axis label
-  plt.xlabel('Snow Classification')
-  # Set y-axis label
-  plt.ylabel('NDSI Snow Cover')
-
-  return plt.show()
-
-plot3 = seabornPlot(data)
-plot4 = seabornPlot(data_woJamesZeros)
-
-## ordinal regression analysis in python 
-
-## We will use a pandas function CategoricalDtype to convert our 0,1,2,3,4 to an ordered category
-#(data['SnowCover'].astype("category")).dtype
-#(data['SnowCover'].astype("category")
-## We will then use OrderedModel to understand the the ordered relationship between the two
-
-
-from pandas.api.types import CategoricalDtype
-
-categories = CategoricalDtype(categories=[0, 1, 2, 3, 4], ordered=True)
-mod_log = OrderedModel(data['NDSImodis'],data['SnowCover'].astype(categories),distr='logit')
-
-res_log = mod_log.fit(method='bfgs', disp=False)
-res_log.summary()
-
-### Coefficient: 0.7845
-
-## see if changes for James's data removed 
-
-## ordinal regression analysis in python 
-
-## We will use a pandas function CategoricalDtype to convert our 0,1,2,3,4 to an ordered category
-## We will then use OrderedModel to understand the the ordered relationship between the two
-
-from pandas.api.types import CategoricalDtype
-
-categories = CategoricalDtype(categories=[0, 1, 2, 3, 4], ordered=True)
-mod_log = OrderedModel(data_woJamesZeros['NDSImodis'],data_woJamesZeros['SnowCover'].astype(categories),distr='logit')
-
-res_log_woJames = mod_log.fit(method='bfgs', disp=False)
-res_log_woJames.summary() 
-# coefficient 1.5224
-
-data
-
-def seabornPlot_scatter(data, BinomialSetting):
-  sns.set(style="white")
-  ax = sns.scatterplot(data['NDSImodis'], data[BinomialSetting])
-
-  ax = sns.regplot(x='NDSImodis', y=BinomialSetting, data=data,
-                 logistic=True)
-  ax.set_yticks([0,1])
-  ax.set_xticks([-1,20,40,60,80,100])
-
-  sns.set(rc={'figure.figsize':(10,5)})
-  # Set x-axis label
-  plt.xlabel('NDSI Snow Cover')
-  # Set y-axis label
-  plt.ylabel('Snow Classification')
-
-  return plt.show()
-
-plot5 = seabornPlot_scatter(data, 'SnowCoverBinomial_1')
-plot6 = seabornPlot_scatter(data, 'SnowCoverBinomial_2')
-
-snow_mod1 = logit("SnowCoverBinomial_1 ~ NDSImodis", data).fit()
-print('SnowCoverBinomial_1',snow_mod1.summary())
-
-snow_mod2 = logit("SnowCoverBinomial_2 ~ NDSImodis", data).fit()
-print('SnowCoverBinomial_2',snow_mod2.summary())
-
-"""The next step is to use simple correlation analysis...and see how well are they related using the
- correlation coefficient (r). If the r is small your conclusion would be that they are weakly related 
- and so no desirable comparisons and a larger value if r would suggest good comparisons s between the two series. 
- The third step where there is good correlation is to test the statistical significance of the r. Here you can use the
-  Shapiro Welch test which would assume the two series are normally distributed (null hypothesis ) or not (alternative hypothesis). 
-There are other tests you can do but let me hope my answer helps.
-
-"""
-
-## Regression
-
-snow_mod = logit("Snow ~ NDSImodis + treecanopyheight + landclass"
-                   "+ NDVImodis", fullData).fit()
-
-print(snow_mod.summary())
 
 import numpy as np
 
-def photoCount2018(df):
-  df['Date'] = pd.to_datetime(df['Date']) 
-  CameraID = df["File"].str.split("_", n = 1, expand = True) 
-  df['LokalitetID'] = CameraID[0].astype(int)
-  df['SnowCover'].replace('', np.nan, inplace=True)
-  df.dropna(subset=['SnowCover'], inplace=True)
-  df.reset_index()
-  ### since we only did the timelapse images we need to filter out the empty values
-
-  return df
-
-photoCount2018data = photoCount2018(df=CameraData) 
-photoCount2018data = photoCount2018data.reset_index()
+photoCount2018data = data#photoCount2018(df=data) 
+#photoCount2018data = #photoCount2018data.reset_index()
 
 
 January = []
@@ -642,4 +708,278 @@ print(sum(December))
 #22
 #
 
-502+690+1645+854+388+359+544+10+7+22
+
+
+"""### **Ordinal Regression**"""
+
+def linearRegressionPlot(data):
+  data.columns ## column names
+### basic plot 
+# basic plot 
+## Scatter plot on Result5 
+  fig = plt.figure(figsize=(12,5))
+  ax = fig.add_axes([0.1, 0.1, 0.8, 0.8]) # main axes, i am not sure what these numbers do, but it works when they are together 
+  plt.scatter(data['SnowCover'],data['NDSImodis']) 
+  ax.set_xticks([0,1,2,3,4])
+  ax.set_yticks([0,20,40,60,80,100])
+  ax.set_ylabel('MODIS NDSI Snow Cover')
+  ax.set_xlabel('Snow Classification')
+  ## add line of best fit
+
+  ## do statistical correlation 
+  ## Because this violates the law of normality, we will do an ordinal linear regression test
+
+  return plt.show() #, statistical test
+
+#plot1 = linearRegressionPlot(data)
+#plot2 = linearRegressionPlot(data_woJamesZeros) ## night time labeling is really hard 
+#plot2 = linearRegressionPlot(data_woPoorSecOpin)
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def seabornPlot(data):
+  sns.set(style="white")
+  ax = sns.boxplot(x='SnowCover', y='NDSImodis', data=data, showfliers = False)
+  ax = sns.stripplot(x='SnowCover', y='NDSImodis', data=data, color=".40")
+  sns.set(rc={'figure.figsize':(10,5)})
+  # Set x-axis label
+  plt.xlabel('Snow Classification')
+  # Set y-axis label
+  plt.ylabel('NDSI Snow Cover')
+
+  return plt.show()
+
+plot3 = seabornPlot(data)
+plot4 = seabornPlot(data_woJamesZeros)
+plot5 = seabornPlot(data_woPoorSecOpin)
+
+## ordinal regression analysis in python 
+
+## We will use a pandas function CategoricalDtype to convert our 0,1,2,3,4 to an ordered category
+#(data['SnowCover'].astype("category")).dtype
+#(data['SnowCover'].astype("category")
+## We will then use OrderedModel to understand the the ordered relationship between the two
+from pandas.api.types import CategoricalDtype
+
+## this one uses package from statsmodel 
+def OrdMod_summary():
+  categories = CategoricalDtype(categories=[0, 1, 2, 3, 4], ordered=True)
+  mod_log = OrderedModel(data['SnowCover'].astype(categories),data['NDSImodis'],distr='logit')
+  res_log = mod_log.fit(method='bfgs', disp=False)
+  print(res_log.summary())
+
+## Alternative style 
+## this one uses mord 
+#https://pythonhosted.org/mord/reference.html#mord.MulticlassLogistic 
+# https://pythonhosted.org/mord/
+  # there are three different options here too: All-Threshold variant, Immediate-Threshold variant, Least Absolute Deviation
+# example of mord: https://github.com/fabianp/mord/blob/master/examples/housing.py
+import numpy as np
+import mord as m
+from sklearn import linear_model, metrics, preprocessing
+
+def mordmodel_summary():
+  c = m.LogisticIT() #Default parameters: alpha=1.0, verbose=0, maxiter=10000
+  X, y = np.array(data['NDSImodis']).reshape(-1,1), np.array(data['SnowCover'].astype(categories))
+  c.fit(X, y)
+  print('Mean Absolute Error of LogisticAT %s' %
+      metrics.mean_absolute_error(c.predict(X), y))
+
+print(OrdMod_summary()) ### Coefficient: 0.7845
+#print(mordmodel_summary()) ### Mean Absolute Error of LogisticAT: 0.7471059
+
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, confusion_matrix
+
+#https://realpython.com/logistic-regression-python/#logistic-regression-python-packages
+
+## logistic regression from scikit-learn
+def logit_skikitlearn():
+  x, y = np.array(data['NDSImodis']).reshape(-1,1), np.array(data['SnowCover'].astype(categories))
+  model = LogisticRegression(solver='liblinear', C=0.05, multi_class='ovr', random_state=0).  ## set multi_class if want to do ordinal 
+  result = model.fit(x, y)
+  # Step 4: Evaluate the model
+  p_pred = model.predict_proba(x)
+  y_pred = model.predict(x)
+  score_ = model.score(x, y)
+  conf_m = confusion_matrix(y, y_pred)
+  report = classification_report(y, y_pred)
+
+  print('intercept:', model.intercept_)
+  print('coef:', model.coef_, end='\n\n')
+  print('p_pred:', p_pred, sep='\n', end='\n\n')
+  print('y_pred:', y_pred, end='\n\n')
+  print('score_:', score_, end='\n\n')
+  print('conf_m:', conf_m, sep='\n', end='\n\n')
+  print('report:', report, sep='\n')
+
+#logit_skikitlearn()
+
+## see if changes for James's data removed 
+
+## ordinal regression analysis in python 
+
+## We will use a pandas function CategoricalDtype to convert our 0,1,2,3,4 to an ordered category
+## We will then use OrderedModel to understand the the ordered relationship between the two
+
+from pandas.api.types import CategoricalDtype
+
+categories = CategoricalDtype(categories=[0, 1, 2, 3, 4], ordered=True)
+mod_log = OrderedModel(data_woJamesZeros['NDSImodis'],data_woJamesZeros['SnowCover'].astype(categories),distr='logit')
+
+res_log_woJames = mod_log.fit(method='bfgs', disp=False)
+res_log_woJames.summary() 
+# coefficient 1.5224
+
+"""### **Binomial Regression**"""
+
+def seabornPlot_scatter(data, BinomialSetting):
+  sns.set(style="white")
+  ax = sns.scatterplot(data['NDSImodis'], data[BinomialSetting])
+
+  ax = sns.regplot(x='NDSImodis', y=BinomialSetting, data=data,
+                 logistic=True, ax = ax)
+  ax.set_yticks([0,1])
+  ax.set_yticklabels([0,1], fontsize = 12)
+  #ax.set_xticks([-1,20,40,60,80,100])
+  ax.set_xlim([-1, 100])
+  #ax.set_xticklabels([0,20,40,60,80,100], fontsize = 12)
+
+  sns.set(rc={'figure.figsize':(10,5)})
+  # Set x-axis label
+  plt.xlabel('NDSI Snow Cover')
+  # Set y-axis label
+  plt.ylabel('Snow Classification')
+
+  return plt.show()
+
+#plot5 = seabornPlot_scatter(data, 'SnowCoverBinomial_1')
+#plot6 = seabornPlot_scatter(data, 'SnowCoverBinomial_2')
+
+snow_mod1 = logit("SnowCoverBinomial_1 ~ NDSImodis", data).fit()
+print('SnowCoverBinomial_1',snow_mod1.summary())
+
+snow_mod2 = logit("SnowCoverBinomial_2 ~ NDSImodis", data).fit()
+print('SnowCoverBinomial_2',snow_mod2.summary())
+
+snow_mod3 = logit("SnowCoverBinomial_3 ~ NDSImodis", data).fit()
+print('SnowCoverBinomial_2',snow_mod2.summary())
+
+snow_mod4 = logit("SnowCoverBinomial_4 ~ NDSImodis", data).fit()
+print('SnowCoverBinomial_2',snow_mod2.summary())
+
+
+#snow_mod3 =  logit("SnowCoverBinomial_1 ~ NDSImodis", data_woJamesZeros).fit()
+#print('SnowCoverBinomial_1',snow_mod1.summary())
+
+### take the binary models
+### Run predict; and take out the sensitivity/ specificity 
+
+## mimicking the analysis from the stats consultants: https://www.dezyre.com/recipes/plot-roc-curve-in-python 
+from sklearn import metrics 
+import math
+
+def ROCanalysis(model, data): 
+  #snow_mod1 = logit("SnowCoverBinomial_1 ~ NDSImodis", data).fit()
+  predictions = model.predict(data['NDSImodis']) # same as R i thinK? 
+
+  false_positive_rate1, true_positive_rate1, threshold1 = metrics.roc_curve(data['SnowCoverBinomial_1'], predictions)
+  #print('roc_auc_score for DecisionTree: ', roc_auc_score(y_test, y_score1))
+  #rocData = [threshold1, false_positive_rate1,true_positive_rate1] ## might need to make this a dataframe or combined array
+  
+  ### the threshold probabilities are really different!! 
+
+  ratio = threshold1/(1-threshold1)
+  threshold_logOdds = np.log(ratio)
+  threshold_Score = (threshold_logOdds - model.params[0]) / model.params[1]
+
+  rocData = [threshold1, false_positive_rate1,true_positive_rate1, threshold_logOdds, threshold_Score]
+  df = pd.DataFrame({'threshold_prob': rocData[0],
+                   'false_positive_rate1': rocData[1],
+                   'true_positive_rate1': rocData[2],
+                   'threshold_logOdds': rocData[3],
+                   'threshold_Score': rocData[4],})
+
+  auc = metrics.roc_auc_score(data['SnowCoverBinomial_1'], predictions)
+
+  ### visualization
+  plt.plot(false_positive_rate1, true_positive_rate1, label="data 1, auc="+str(auc))
+  plt.ylabel('True Positive Rate (sensitivity)')
+  plt.xlabel('False Positive Rate') ### might need to make this specificity 
+  
+  
+  return auc, df, plt.show()
+
+
+auc, df, m = ROCanalysis(snow_mod1, data = data)
+print('auc=',auc)
+m
+df 
+## thresholds in ROC function
+#thresholdsndarray of shape = (n_thresholds,)
+#Decreasing thresholds on the decision function used to 
+#compute fpr and tpr. thresholds[0] represents no instances
+# being predicted and is arbitrarily set to max(y_score) + 1.
+
+auc, df, m = ROCanalysis(snow_mod3, data = data_woJamesZeros)
+print(df)
+print(auc)
+
+"""The next step is to use simple correlation analysis...and see how well are they related using the
+ correlation coefficient (r). If the r is small your conclusion would be that they are weakly related 
+ and so no desirable comparisons and a larger value if r would suggest good comparisons s between the two series. 
+ The third step where there is good correlation is to test the statistical significance of the r. Here you can use the
+  Shapiro Welch test which would assume the two series are normally distributed (null hypothesis ) or not (alternative hypothesis). 
+There are other tests you can do but let me hope my answer helps.
+
+"""
+
+from scipy.stats import pearsonr
+covariance1 = pd.Series.corr(data_wCovariates['treecanopyheight'], data_wCovariates['landclass'])
+covariance2 = pd.Series.corr(data_wCovariates['landclass'], data_wCovariates['NDVImodis'])
+covariance3 = pd.Series.corr(data_wCovariates['treecanopyheight'], data_wCovariates['NDVImodis'])
+
+print(covariance1, covariance2, covariance3)
+
+data_wCovariates
+
+
+
+data['SnowCover'].astype(categories)
+
+"""### **Ordinal Regression **"""
+
+categories = CategoricalDtype(categories=[0, 1, 2, 3, 4], ordered=True)
+
+snow_mult_mod = logit("SnowCoverBinomial_1 ~ NDSImodis + (1|LokalitetID) + landclass + treecanopyheight + Month + Analyst + snowPhase + NDVImodis + Sunrise", data_wCovariates).fit()
+## add camera as random intercept 
+## 
+
+#snow_mult_mod = logit("SnowCoverBinomial_1 ~ NDSImodis", data_wCovariates).fit()
+print(snow_mult_mod.summary())
+
+"""pymer4 is down due to recent updates in rpy2. 
+It's necessary to install via source until this issue is resolved. 
+"""
+!git clone https://github.com/ejolly/pymer4.git
+!cd pymer4 && git pull origin dev && git checkout dev && pip install -q .
+
+# Install pymer4
+!pip install -q pymer4
+# load pymer4
+from pymer4.models import Lmer
+
+#import pymer4
+from pymer4.models import Lmer
+model = Lmer("SnowCoverBinomial_1  ~ NDSImodis  + (1|LokalitetID) + landclass + treecanopyheight + Month + Analyst + snowPhase + NDVImodis + Sunrise",
+             data=data_wCovariates, family = 'binomial')
+
+print(model.fit())
+
+plt.hist(data_wCovariates['NDVImodis'])
+#data_wCovariates['landclass'].unique()
+
+print(snow_mult_mod.summary())
