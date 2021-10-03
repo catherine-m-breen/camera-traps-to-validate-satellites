@@ -1,0 +1,675 @@
+## libraries
+library(gtable)
+library(grid)
+library(gridExtra)
+library(abind)
+library(ggplot2)
+library(pROC)
+
+## data
+#data_csv = 'data_wCovariates_Sept8-2021.csv'
+data_csv <- 'data_wCovariates_Sept16-2021.csv'
+
+data <- read.csv(data_csv)
+
+##########
+#histogram
+
+hist1 <- ggplot(data, aes(SnowCover)) +
+  geom_histogram(bins = 5,
+  fill="cadetblue3", col="cadetblue4") +
+  theme(panel.background = element_blank(), text = element_text(size=14),
+  axis.line = element_line(colour = "black"))+
+  xlab("Snow Classification")
+
+
+hist2 <- ggplot(data, aes(NDSImodis)) +
+  geom_histogram(bins = 5, fill="cadetblue3", col="cadetblue4") +
+  theme(panel.background = element_blank(), text = element_text(size=14),
+  axis.line = element_line(colour = "black")) +
+  xlab("NDSI Snow Cover")
+
+histPanel <- grid.arrange(hist1, hist2, nrow = 2)
+
+####
+head(data)
+snow1 <- sapply(data["SnowCoverBinomial_1"], function(x)
+  x)
+snow2 <- sapply(data["SnowCoverBinomial_2"], function(x)
+  x)
+snow3 <- sapply(data["SnowCoverBinomial_3"], function(x)
+  x)
+snow4 <- sapply(data["SnowCoverBinomial_4"], function(x)
+  x)
+
+score <- sapply(data["NDSImodis"], function(x)
+  x)
+## have to drop a dimension to get it to work in the model
+score <-
+  abind::adrop(score,
+               drop = 2,
+               named.vector = TRUE,
+               one.d.array = FALSE)
+
+# Fit logistic regression model using simulated data
+
+#############################
+# loop this through each snow binomial threshold #
+
+snowVector <- list(snow1, snow2, snow3, snow4)
+rocCurves <- list()
+#length(snowVector)
+#for (i in 1:length(snowVector)){
+for (i in 2:2){
+  logit_model <- glm(snowVector[[i]] ~ score, family = "binomial")
+  summary(logit_model)
+  confint(logit_model)
+  ## calc pseudo r^2 by calculating residual/ null...
+  pseudoR2 <-
+    (logit_model$null.deviance - logit_model$deviance) / logit_model$null.deviance ## check formula
+  print(pseudoR2)
+  PseudoR2(logit_model, c("McFadden", "Nagel", "CoxSnell", "Nagelkerke"))
+
+  ##  0.7282802 Feb 27
+  #  0.7572857
+  # 0.3879764
+  # 0.3211134 for >= 1
+  # 0.3289953 >=2
+
+  # Plot model output
+  # Laura says this plot is boring, so we will delete
+  #plot(
+    #snowVector[[i]] ~ score,
+    #main = "Snow Classification on MODIS NDSI Snow Cover",
+    #xlab = "MODIS NDSI Snow Cover",
+    #ylab = "Snow Classification (>= 1)",
+    #yaxt = "n"
+  #)
+  #axis(2, at = c(0, 1))
+  #curve(predict(logit_model, data.frame(score = x), type = "resp"), add =
+          #TRUE)
+
+  # Create ROC curve
+  predictions <-
+    stats::predict(logit_model, data.frame(score = score), type = "resp")
+
+  # what is type "resp"
+  # roc function takes the actual outcomes and the predicted values from the fit model
+  roc <- pROC::roc(snowVector[[i]], predictions) ## this isn't running?? ***
+
+  # Can extract the thresholds used and associated sensitivities and specificities
+  roc_data <- data.frame(
+    threshold_probability = roc$thresholds,
+    sens = roc$sensitivities,
+    spec = roc$specificities
+  )
+
+  # Roc gives thresholds in terms of estimated probability according to the logistic model
+  # from which we can back out the score threshold
+  roc_data$threshold_log_odds <-
+    with(roc_data, log(threshold_probability / (1 - threshold_probability)))
+  roc_data$threshold_score <-
+    (roc_data$threshold_log_odds - logit_model$coefficients[1]) / logit_model$coefficients[2]
+
+  # Plot to see ROC curve
+  m1 <-
+    ggplot(roc_data, aes(x = 1 - spec, y = sens)) + geom_line() +
+    ylab("True Positive Rate") +
+    theme(
+      panel.grid.major = element_line(colour = "grey", linetype = "dotted"),
+      panel.grid.minor = element_line(colour = "grey", linetype = "dotted"),
+      panel.background = element_blank(),
+      text = element_text(size=14),
+      axis.line = element_line(colour = "black"),
+      axis.title.x=element_blank(),
+      axis.text.x=element_blank(),
+      axis.ticks.x=element_blank()
+    )
+  print(m1)
+
+  m2 <-
+    ggplot(roc_data, aes(x = 1 - spec, y = sens)) + geom_line() +
+    theme(
+      panel.grid.major = element_line(colour = "grey", linetype = "dotted"),
+      panel.grid.minor = element_line(colour = "grey", linetype = "dotted"),
+      panel.background = element_blank(),
+      text = element_text(size=14),
+      axis.line = element_line(colour = "black"),
+      axis.title.x=element_blank(),
+      axis.text.x=element_blank(),
+      axis.ticks.x=element_blank(),
+      axis.title.y=element_blank(),
+    )
+
+  m3 <-
+    ggplot(roc_data, aes(x = 1 - spec, y = sens)) + geom_line() +
+    xlab("False Positive Rate") +
+    ylab("True Positive Rate") +
+    theme(
+      panel.grid.major = element_line(colour = "grey", linetype = "dotted"),
+      panel.grid.minor = element_line(colour = "grey", linetype = "dotted"),
+      panel.background = element_blank(),
+      text = element_text(size=14),
+      axis.line = element_line(colour = "black"),
+    )
+
+  m4 <-
+    ggplot(roc_data, aes(x = 1 - spec, y = sens)) + geom_line() +
+    xlab("False Positive Rate") +
+    theme(
+      panel.grid.major = element_line(colour = "grey", linetype = "dotted"),
+      panel.grid.minor = element_line(colour = "grey", linetype = "dotted"),
+      panel.background = element_blank(),
+      text = element_text(size=14),
+      axis.line = element_line(colour = "black"),
+      axis.title.y=element_blank(),
+    )
+
+  if (i == 1) {rocCurves[[i]] <- m1}
+  else if (i == 2) {rocCurves[[i]] <- m2}
+  else if (i == 3) {rocCurves[[i]] <- m3}
+  else if (i == 4) {rocCurves[[i]] <- m4}
+
+  y <- roc_data$sens
+  x <- 1 - roc_data$spec
+  #plot(x,y)
+  #to see a summary of sensitivity and specificity for all possible cut points: roc_data
+  roc_data[10, ] ## can do this up to 250 or so, depending on how many rows you want to see
+
+  print(roc_data[1:90, ])
+}
+rocPanel <- grid.arrange(rocCurves[[1]], rocCurves[[2]], rocCurves[[3]], rocCurves[[4]], nrow = 2, ncol=2)
+
+## plot getting threshold values
+
+## match this with 0 and then with 1 and then plot the two on the distributions on the same axis
+
+####### AGREEMENT PLOT ########
+distributions <- data.frame(predictions, factor(snowVector[[2]]), score)
+colnames(distributions) <- c('probabilities', 'Category', 'NDSIValue')
+distributions$agreement <- seq(1,length(distributions$probabilities))
+for (i in 1:length(distributions$Category)){
+  if (distributions[i,3] >= 44 & distributions[i,2] == "1")
+  {distributions[i,4] <- as.integer(1)}
+  else if (distributions[i,3] < 44 & distributions[i,2] == "0")
+  {distributions[i,4] <- as.integer(1)}
+  else {distributions$agreement[[i]] <-  as.integer(0)}
+}
+
+##### make logit model going back to original data
+head(distributions$NDSIValue) ## they are all in the same order
+head(data$NDSImodis) ## they are all in the same order
+
+
+logit_model_agreement <- glm(distributions$agreement ~
+                               data$treecanopycover + data$Latitude + data$Day_Or_Night + (1 | data$LokalitetID) +
+                               data$snowPhase, family = "binomial")
+summary(logit_model_agreement)
+confint(logit_model_agreement)
+## calc pseudo r^2 by calculating residual/ null...
+Agreement_pseudoR2 <-
+  (logit_model_agreement$null.deviance - logit_model_agreement$deviance) / logit_model_agreement$null.deviance ## check formula
+print(Agreement_pseudoR2)
+PseudoR2(logit_model_agreement, c("McFadden", "Nagel", "CoxSnell", "Nagelkerke"))
+
+
+data$agreement <- distributions$agreement
+#write.csv(Path to export the DataFrame\\data_agreement.csv)
+
+
+####################
+#freqPlot <- ggplot(distributions, aes(x = NDSIValue, fill = Category)) +
+#  geom_freqpoly(alpha=0.3)  +
+#  theme(panel.background = element_blank(), text = element_text(size=14),
+#        axis.line = element_line(colour = "black"),) +
+#  xlab("MODIS NDSI Snow Cover Value") +
+#  ylab('Density') #+
+ #scale_fill_discrete(labels = c("no snow", "snow")) +
+ # geom_area(stat = "bin")
+
+#+
+  #geom_vline(xintercept=43.499379, linetype="longdash", alpha=0.9, colour="purple")
+
+#print(freqPlot)
+##################
+
+freqPlot <- ggplot(distributions, aes(x = NDSIValue, fill = Category)) +
+  geom_histogram(binwidth = 5, position = "identity", alpha = 0.5) +
+  theme(panel.background = element_blank(), text = element_text(size=18),
+        axis.line = element_line(colour = "black"), legend.position = c(0.7, 0.7), legend.title.align=0.5) +
+  xlab("MODIS NDSI Snow Cover Value") +
+  ylab('Count') +
+  scale_fill_discrete(labels = c("no snow", "snow"), ) +
+  scale_fill_manual(name = "Camera-based\nClassification ", values = c("red", "blue"),labels = c("no snow", "snow"),) +
+  scale_x_continuous(expand = c(0, 0), limits = c(-5, 105), breaks = seq(0, 100, by=20)) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 3050))
+  #scale_x_continuous(breaks = seq(0, 100, by=10), limits = c(-5, 100)) +
+  #scale_y_continuous(limits=c(0,3000))
+print(freqPlot)
+
+# "darkorchid2", "springgreen4")
+##
+## plot how sensitivity and specificity compare
+plot(roc_data$sens)
+plot(roc_data$spec)
+
+coords(roc, "best", ret = "threshold") ## why is this 0.52
+roc$thresholds[which.max(roc$sensitivities + roc$specificities)]
+roc_data
+## 0.5260591
+## 0.52605908 0.9272606677 0.8607509        0.104330845       43.499379
+## threshold is 43.499379
+
+###################
+p = ggplot(roc_data) +
+  geom_line(data = roc_data, aes(x = threshold_score, y = sens),
+           label = 'True Positive Rate') +
+  geom_line(data = roc_data, aes(x = threshold_score, y = sens+spec-1), color = "orange",
+            label = 'Youden Method') +
+  geom_line(data = roc_data, aes(x = threshold_score, y = 1-spec), color = "forest green",
+            label = 'True Negative Rate') +
+  theme(    panel.grid.major = element_line(colour = "grey", linetype = "dotted"),
+            panel.grid.minor = element_line(colour = "grey", linetype = "dotted"),
+            panel.background = element_blank(), text = element_text(size=14),
+    axis.line = element_line(colour = "black"),) +
+  xlab('MODIS NDSI Snow Cover') + ylab('Rate') +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1.00),
+  sec.axis = sec_axis(trans = ~.*1,  name="Youden's Index")) +
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 100)) +
+  geom_vline(xintercept=43.499379, linetype="longdash", alpha=0.9, colour="blue") +
+  geom_point(aes(x=43.499379, y=(0.9272606677-(1-0.8607509))), colour="blue", size = 3) +
+  labs(
+    color = "name1",
+    shape = "name2"
+  )
+print(p)
+#########################
+#### turn into ROC data into long data
+# use this one
+rocdataWide <- roc_data[, c(2, 3, 5)]
+rocdataWide$TrueNeg <- 1 - roc_data$spec
+rocdataWide$Youden <- roc_data$sens+roc_data$spec-1
+rocdataWide <- rocdataWide[, c(1, 3, 4, 5)]
+rocdataLong <-melt(data = rocdataWide,
+                    id.vars = 'threshold_score',
+                     variable.name = "ROCOutput",
+                     value.name = "Value")
+
+thresholdPlot <- ggplot(rocdataLong, aes(x = threshold_score , y = Value, color = ROCOutput)) +
+  geom_line(size = 1.5) +
+  theme(    panel.grid.major = element_line(colour = "grey", linetype = "dotted"),
+            panel.grid.minor = element_line(colour = "grey", linetype = "dotted"),
+            panel.background = element_blank(), text = element_text(size=18),
+            axis.line = element_line(colour = "black"),
+            legend.position = c(0.8, 0.8), legend.title.align=0.5) +
+  xlab('MODIS NDSI Snow Cover') + ylab('Rate') +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1.01),
+                     sec.axis = sec_axis(trans = ~.*1,  name="Youden's Index")) +
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 100)) +
+  geom_vline(xintercept=43.499379, linetype="longdash", alpha=0.9, colour="blue") +
+  geom_point(aes(x=43.499379, y=(0.9272606677-(1-0.8607509))), colour="blue", size = 4)+
+  scale_color_manual(name = "ROC Output", values = c("red", "orange", "green"), labels = c("True Positive Rate", "True Negative Rate", "Youden's Index"),)
+
+print(thresholdPlot)
+######################
+
+#+
+  #geom_hline(yintercept=best.coords[["specificity"]]) +
+  #geom_hline(yintercept=best.coords[["sensitivity"]])
+
+
+##########
+best.coords <- coords(roc, "best", best.method="youden")
+mycoords <- coords(roc, "all")
+#
+#threshold specificity sensitivity
+#1 0.5260591   0.8607509   0.9272607
+
+rocPlot <-
+  ggplot(roc_data, aes(x = 1 - spec, y = sens),) + geom_line(size=1.5, color = "grey") +
+  xlab("False Positive Rate") +
+  ylab("True Positive Rate") +
+  theme(
+    panel.grid.major = element_line(colour = "grey", linetype = "dotted"),
+    panel.grid.minor = element_line(colour = "grey", linetype = "dotted"),
+    panel.background = element_blank(),
+    text = element_text(size=18),
+    axis.line = element_line(colour = "black"),
+  ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1.00)) +
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 1.05)) +
+  geom_point(aes(x=1-0.8607509, y=0.9272606677), colour="blue", size = 4)
+
+print(rocPlot)
+#rocPanel <- grid.arrange(rocPlot, p, nrow = 1)
+rocPanel <- grid.arrange(rocPlot, thresholdPlot, nrow=1)
+
+
+truePosFalsPos <-
+  ggplot(roc_data, aes(x = threshold_score, y = sens-(1-spec))) + geom_line() +
+  xlab("MODIS Snow Cover Value") +
+  ylab("Youden's Method") +
+  theme(
+    panel.grid.major = element_line(colour = "grey", linetype = "dotted"),
+    panel.grid.minor = element_line(colour = "grey", linetype = "dotted"),
+    panel.background = element_blank(),
+    text = element_text(size=14),
+    axis.line = element_line(colour = "black"),
+  ) +
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 105)) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1.00)) +
+  geom_point(aes(x=43.499379, y=(0.9272606677-(1-0.8607509))), colour="blue", size = 3) +
+  geom_vline(xintercept=43.499379, linetype="longdash", alpha=0.9, colour="purple")
+
+print(truePosFalsPos)
+rocPanel <- grid.arrange(rocPlot, truePosFalsPos, nrow = 1)
+
+
+install.packages("OptimalCutpoints")
+library(OptimalCutpoints)
+??cutpointr
+library(cutpointr)
+install.packages("cutpointr")
+
+opt_cut <- cutpointr(distributions, NDSIValue, Category, direction = ">=", pos_class = "1",
+                     neg_class = "0", method = maximize_metric, metric = youden)
+plot_metric(opt_cut) +
+  geom_vline(xintercept=43.499379, linetype="longdash", alpha=0.9, colour="purple")
+
+cp <- cutpointr(distributions, NDSIValue, Category,
+                method = maximize_metric, metric = sum_sens_spec)
+summary(cp)
+
+
+#########################################
+## Ordinal Regression
+require(foreign)
+require(ggplot2)
+require(MASS)
+#install.packages('Hmisc')
+require(Hmisc)
+require(reshape2)
+#install.packages("DescTools")
+require(DescTools)
+
+## turn the categorical variables in factors
+
+#data$difference <- [data$SnowCover - data$SnowCover]
+
+
+### make
+data$Analyst <- factor(data$Analyst)
+data$snowPhase <- factor(data$snowPhase)
+data$Sunrise <- factor(data$Sunrise)
+data$Day_Or_Night <- factor(data$Day_Or_Night)
+data$SnowCoverFactor <- factor(data$SnowCover,
+                               levels = c("0", "1", "2", "3", "4"), ordered = TRUE)
+
+## visualize it
+
+#SnowCover <- data$SnowCoverFactor
+plot1 <- ggplot(data, aes(x = SnowCoverFactor, y = score, fill = SnowCoverFactor)) +
+  geom_boxplot(size = .75) +
+  theme(text = element_text(size=14), panel.background = element_blank(),
+        axis.line = element_line(colour = "grey"),
+    axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1),
+    legend.position = "none") +
+  scale_fill_manual(values = c("darkorchid2", "royalblue2", "#006666", "springgreen4", "yellow1"))+
+  xlab("Snow Classification") + ylab("NDSI Snow Cover")
+
+print(plot1)
+model_wAllData <- polr(SnowCoverFactor ~ NDSImodis, data = data, Hess=TRUE)
+PseudoR2(model_wAllData, c("McFadden", "Nagel", "CoxSnell", "Nagelkerke"))
+
+####
+#switch axis for boxplot
+## has to be factor for boxplot, but want continuous for R2 calculation
+
+plot1half <- ggplot(data, aes(x = score, y = SnowCoverFactor, fill = SnowCoverFactor)) +
+  geom_boxplot(size = .75) +
+  theme(text = element_text(size=14), panel.background = element_blank(),
+        axis.line = element_line(colour = "grey"),
+        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1),
+        legend.position = "none") +
+  scale_fill_manual(values = c("darkorchid2", "royalblue2", "#006666", "springgreen4", "yellow1"))+
+  xlab("NDSI Snow Cover") + ylab("Snow Classification")
+
+print(plot1half)
+rsq <- cor(score, data$SnowCover) ^ 2
+
+# Fit linear regression
+linear_model <- lm(score ~ data$SnowCover, data=data)  # build linear regression model on full data
+print(linear_model)
+summary(linear_model)
+
+##################################
+### function that looks at outliers and calculates percentages
+
+OutlierCheck <- function(data) {
+  plot1half <- ggplot(data, aes(x = NDSImodis, y = SnowCoverFactor, fill = SnowCoverFactor)) +
+    geom_boxplot(size = .75) +
+    theme(text = element_text(size=14), panel.background = element_blank(),
+          axis.line = element_line(colour = "grey"),
+          axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1),
+          legend.position = "none") +
+    scale_fill_manual(values = c("darkorchid2", "royalblue2", "#006666", "springgreen4", "yellow1"))+
+    xlab("NDSI Snow Cover") + ylab("Snow Classification")
+
+  print(plot1half)
+  rsq <- cor(data$NDSImodis, data$SnowCover) ^ 2
+
+  # Fit linear regression
+  linear_model <- lm(NDSImodis ~ data$SnowCover, data=data)  # build linear regression model on full data
+  print(linear_model)
+  summary(linear_model)
+  print(summary(linear_model))
+}
+
+
+### this has the tree data, but there are a few NAs from GEE
+data_is.na <- data[!is.na(data[,34]), ]
+for (i in 1:nrow(data_is.na)){
+  if (data_is.na[i,34] >= 30) {data_is.na[i,37] <- "high"}
+  else {data_is.na[i,37] <- "low"}
+}
+table(data$treecanopycoverCategorical) ## high -- 7776; low -- 1142
+
+data_woSecondOpinion<-data[!(data$SecondOpinion==T),]
+OutlierCheck(data_woSecondOpinion)
+data_woNight<-data[!(data$Day_Or_Night=="Night"),]
+OutlierCheck(data_woNight)
+data_woLowCanopy<-data_is.na[!(data_is.na$treecanopycoverCategorical=="low"),]
+data_woHighCanopy<-data_is.na[!(data_is.na$treecanopycoverCategorical=="high"),]
+OutlierCheck(data_woLowCanopy)
+OutlierCheck(data_woHighCanopy)
+
+histogram(data$Latitude)
+#data_is.na <- data[!is.na(data[,34]), ]
+data$LatitudeCategory <- seq(1:length(data$treecanopycover))
+for (i in 1:nrow(data)){
+  if (data[i,27] >= 63.21) {data[i,38] <- "high"}
+  else {data[i,38] <- "low"}
+}
+data_woHighLatitude<-data[!(data$LatitudeCategory=="high"),]
+OutlierCheck(data_woHighLatitude)
+data_woLowLatitude<-data[!(data$LatitudeCategory=="low"),]
+OutlierCheck(data_woLowLatitude)
+
+table(data$snowPhase)
+data_woFall<-data[!(data$snowPhase=="fall"),]
+OutlierCheck(data_woFall)
+data_woWinter<-data[!(data$snowPhase=="winter"),]
+OutlierCheck(data_woWinter)
+data_woSpring<-data[!(data$snowPhase=="spring"),]
+OutlierCheck(data_woSpring)
+
+histogram(data$dayOfWinterSeason)
+
+#######################################
+
+## null model
+  ## fit ordered logit model and store results 'm'
+#highlighting the proportional odds assumption in our model.
+
+
+###########
+# instead of ordinal Regression transform data and make it linear regression
+sqrt_y <- sqrt(data$NDSImodis)
+
+############
+
+nullModel <- polr(SnowCover ~ (1|LokalitetID), data = data, Hess=TRUE)
+PseudoR2(nullModel, c("McFadden", "Nagel", "CoxSnell", "Nagelkerke"))
+
+(ctable <- coef(summary(nullModel)))
+
+## calculate and store p values
+p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+
+## combined table
+(ctable <- cbind(ctable, "p value" = p))
+
+## fix this!!
+#OrdinalpseudoR2 <-
+#  (nullModel$null.deviance - nullModel$deviance) / nullModel$null.deviance ## check formula
+#print(OrdinalpseudoR2)
+
+## view a summary of the model
+summary(nullModel)
+extractAIC(nullModel)
+(ci <- confint(nullModel))
+sorted.nullModel <- as.data.frame(ctable)
+sorted.nullModel <- sorted.nullModel[order(sorted.nullModel$pvalue),]
+
+#########
+
+fullModel <- polr(SnowCover ~ score +
+                    (1|LokalitetID) +
+                    Latitude +
+                    treecanopycover +
+                    Analyst +
+                    Day_Or_Night +
+                    dayOfWinterSeason, data = data, Hess=TRUE)
+
+summary(fullModel)
+extractAIC(fullModel)
+(ctable <- coef(summary(fullModel)))
+(ci <- confint(fullModel))
+p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+## combined table
+(ctable <- cbind(ctable, "pvalue" = p))
+sorted.fullModel <- as.data.frame(ctable)
+sorted.fullModel <- sorted.fullModel[order(sorted.fullModel$pvalue),]
+PseudoR2(fullModel, c("McFadden", "Nagel", "CoxSnell", "Nagelkerke"))
+
+
+##### drop the lowest tvalues? or the lowest values?
+Model3 <- polr(SnowCover ~ score +
+                 (1|LokalitetID) +
+                 Latitude +
+                 treecanopycover +
+                 Analyst +
+                 dayOfWinterSeason, data = data, Hess=TRUE)
+#make a nested random effects,
+# random effects model (season, latitude, canopy cover, time of day) / day & night time
+# canopy cover with random effects and see how the R2 compares
+#
+summary(Model3)
+extractAIC(Model3)
+(ctable <- coef(summary(Model3)))
+(ci <- confint(Model3))
+p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+## combined table
+(ctable <- cbind(ctable, "pvalue" = p))
+sorted.Model3 <- as.data.frame(ctable)
+sorted.Model3 <- sorted.Model3[order(sorted.Model3$pvalue),]
+PseudoR2(Model3, c("McFadden", "Nagel", "CoxSnell", "Nagelkerke"))
+
+#########################
+
+Model4 <- polr(SnowCover ~ score +
+                 (1|LokalitetID) +
+                 Latitude +
+                 Analyst +
+                 dayOfWinterSeason, data = data, Hess=TRUE)
+#make a nested random effects,
+# random effects model (season, latitude, canopy cover, time of day) / day & night time
+# canopy cover with random effects and see how the R2 compares
+#
+summary(Model4)
+extractAIC(Model4)
+(ctable <- coef(summary(Model4)))
+(ci <- confint(Model4))
+p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+## combined table
+(ctable <- cbind(ctable, "pvalue" = p))
+sorted.Model4 <- as.data.frame(ctable)
+sorted.Model4 <- sorted.Model4[order(sorted.Model4$pvalue),]
+PseudoR2(Model4, c("McFadden", "Nagel", "CoxSnell", "Nagelkerke"))
+
+#############
+
+Model5 <- polr(SnowCover ~ score +
+                 (1|LokalitetID) +
+                 Latitude +
+                 dayOfWinterSeason, data = data, Hess=TRUE)
+#make a nested random effects,
+# random effects model (season, latitude, canopy cover, time of day) / day & night time
+# canopy cover with random effects and see how the R2 compares
+#
+summary(Model5)
+extractAIC(Model5)
+(ctable <- coef(summary(Model5)))
+(ci <- confint(Model5))
+p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+## combined table
+(ctable <- cbind(ctable, "pvalue" = p))
+sorted.Model5 <- as.data.frame(ctable)
+sorted.Model5 <- sorted.Model5[order(sorted.Model5$pvalue),]
+PseudoR2(Model5, c("McFadden", "Nagel", "CoxSnell", "Nagelkerke"))
+
+#######
+
+Model6 <- polr(SnowCover ~ score +
+                 (1|LokalitetID) +
+                 dayOfWinterSeason, data = data, Hess=TRUE)
+#make a nested random effects,
+# random effects model (season, latitude, canopy cover, time of day) / day & night time
+# canopy cover with random effects and see how the R2 compares
+#
+summary(Model6)
+extractAIC(Model6)
+(ctable <- coef(summary(Model6)))
+(ci <- confint(Model6))
+p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+## combined table
+(ctable <- cbind(ctable, "pvalue" = p))
+sorted.Model6 <- as.data.frame(ctable)
+sorted.Model6 <- sorted.Model5[order(sorted.Model6$pvalue),]
+PseudoR2(Model6, c("McFadden", "Nagel", "CoxSnell", "Nagelkerke"))
+
+####
+
+
+Model7 <- polr(SnowCover ~ score +
+                 (1|LokalitetID + Analyst)
+                 , data = data, Hess=TRUE)
+#make a nested random effects,
+# random effects model (season, latitude, canopy cover, time of day) / day & night time
+# canopy cover with random effects and see how the R2 compares
+#
+summary(Model7)
+extractAIC(Model7)
+(ctable <- coef(summary(Model7)))
+(ci <- confint(Model7))
+p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+## combined table
+(ctable <- cbind(ctable, "pvalue" = p))
+sorted.Model7 <- as.data.frame(ctable)
+sorted.Model7 <- sorted.Model7[order(sorted.Model7$pvalue),]
+PseudoR2(Model7, c("McFadden", "Nagel", "CoxSnell", "Nagelkerke"))
+
+# correlation plot
+install.packages("GGally")
+happy.var <- data[, c(3:10)]
+ggpairs(happy.var, title = "Correlation Plot between each Variable")
