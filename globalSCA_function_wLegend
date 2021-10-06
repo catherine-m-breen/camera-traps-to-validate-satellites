@@ -263,4 +263,4 @@ print('pixel count breakdown',snowmapdate.first().reduceRegion({
   maxPixels: 1e9
 }));
 
-
+///
