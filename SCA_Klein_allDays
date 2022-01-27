@@ -1,0 +1,194 @@
+// Binary MODIS map for all study dates 
+
+var norwayShape = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017')
+  .filter(ee.Filter.eq('country_na', 'Norway'))
+
+    
+    //ee.Filter.or(
+    //ee.Filter.eq('country_na', 'Sweden'),
+    /*ee.Filter.eq('country_na', 'Norway'), */
+    //ee.Filter.eq('country_na', 'Sweden')))
+
+/// binary snow map 
+
+var table = ee.FeatureCollection("users/catherinembreen/ScandCam_AllCameras_05072020_XYTableToPoint"),
+    geometry = /* color: #d63000 */ee.Geometry.MultiPoint();
+
+// update each time with the three different water years (to avoid writing a loop)
+var startDate = '2017-12-01';
+var endDate = '2020-04-30';
+
+
+/* Extract a TimeSeries from both the Terra and 
+Aqua image collections for various locations
+*/
+//////////////////////////////////DATA INPUTS/////////////////////////////
+
+/*var norwayShape = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017')
+  .filter(ee.Filter.or(
+    ee.Filter.eq('country_na', 'Norway'), 
+    ee.Filter.eq('country_na', 'Sweden')))*/
+    
+var NDSI = ee.ImageCollection("MODIS/006/MOD10A1")
+  .select(['NDSI_Snow_Cover'])
+  .filter(ee.Filter.date(startDate, endDate))
+ // .map(function(image){return image.clip(norwayShape)}) 
+var NDVI = ee.ImageCollection('MODIS/MOD09GA_006_NDVI')//'MODIS/006/MOD13A1')  // MODIS NDVI, could update with another dataset
+  .select('NDVI')
+  .filter(ee.Filter.date(startDate,endDate))
+ // .map(function(image){return image.clip(norwayShape)})
+
+//// Join the NDVI and NDSI collections
+
+// Specify an equals filter for image timestamps.
+var filter = ee.Filter.equals({
+  leftField: 'system:index',
+  rightField: 'system:index'
+});
+
+// Create the join.
+var simpleJoin = ee.Join.simple();
+
+// Apply join
+var mod1join = ee.ImageCollection(simpleJoin.apply(NDVI, NDSI, filter))
+var mod2join = ee.ImageCollection(simpleJoin.apply(NDSI, NDVI, filter))
+
+print('Joined', mod1join, mod2join)
+
+var final_col = mod2join.map(function(img){
+
+  // Create a collection with 1 image
+  var temp = ee.ImageCollection(ee.List([img]));
+
+  // Apply join to collection 2
+  // Resulting collection will have 1 image with exact same date as img
+  var join = simpleJoin.apply(mod1join, temp, filter);
+
+  // Get resulting image
+  var i2 = ee.Image(join.first())
+
+  return img.addBands(i2)
+})
+
+print('final_col', final_col.first())
+
+////////// SCA Map ////////////
+
+var snowmask = function(img){
+    // snow = all pixels where NDSI > 0.4 is snow
+  var snow0 = img.select('NDSI_Snow_Cover').gte(0)
+  .and(img.select('NDSI_Snow_Cover').lt(40))
+  .and((img.select('NDVI').lt(img.expression(
+    '-0.5 * (NDSI)/100 + 0.3',{
+    'NDSI': img.select('NDSI_Snow_Cover')
+  })))
+ .or(img.select('NDVI').gt(img.expression (
+  '(-4.5) * (NDSI)/100 * (NDSI)/100 + 4.75 * (NDSI)/100 - 0.18',{
+    'NDSI': img.select('NDSI_Snow_Cover')
+  })))) 
+  .remap([1],[0])
+  var snow1 = img.select('NDSI_Snow_Cover').gte(40).remap([1],[1])//.rename('snow1') //.remap([0],[1]) 
+  var snow2 = img.select('NDSI_Snow_Cover').gte(10)
+     .and(img.select('NDSI_Snow_Cover').lt(40))
+    // .and(img.select('NDVI').gt(0.2))
+    .and(img.select('NDVI').gte(img.expression(
+  '-0.5 * (NDSI)/100 + 0.3',{
+    'NDSI': img.select('NDSI_Snow_Cover')
+  })))
+  .and(img.select('NDVI').lte(img.expression (
+  '(-4.5) * (NDSI)/100 * (NDSI)/100 + 4.75 * (NDSI)/100 - 0.18',{
+    'NDSI': img.select('NDSI_Snow_Cover')
+  }))) 
+     .remap([1],[2])//.remap()
+  return img.addBands(ee.ImageCollection([snow0.byte(),snow1.byte(),snow2.byte()]).mosaic())//,snow2.byte()]).mosaic())          //should this be 0 because NDSI already masks for snow? 
+                        //Should I go back to the raw imagery
+}
+
+//rename vs remap?/
+// land classes: 1 - snow above 0.4 ; 2 - snow between 0.4 and 0.1 above NDVI of 0.2
+
+var snowmap = final_col.map(snowmask) // this has all the data!!
+
+var snowmapdate = snowmap.filter(ee.Filter.date('2018-12-01')) // could update date here
+
+print(snowmapdate)
+print(snowmap)
+
+// function to count pixels 
+// We set it as a property following the instructions here:
+// https://developers.google.com/earth-engine/guides/debugging
+// code for turning values into a whole function found here: 
+// 
+
+var pixelCounter = snowmap.map(function(image){
+  return image.set('pixelCount', image.reduceRegion({
+  reducer: ee.Reducer.frequencyHistogram().unweighted(),
+  geometry: norwayShape.geometry(), //Innlandet
+  maxPixels: 1e9}))
+});
+
+var pixelCountList = pixelCounter.aggregate_array('pixelCount');
+
+
+ // COUNT EACH PIXEL VALUE FREQUENCY (ZONAL STATS)
+var pixelHist = snowmap.map(function(image){
+  var stats = image.reduceRegion({
+  reducer: ee.Reducer.frequencyHistogram(),
+  geometry: geometry,
+  scale: 30,
+  maxPixels: 1e15})
+  var image_Stats = image.set('pixelCount', stats) 
+  var featurestats = ee.Feature(null, stats);
+  var FeatStats = ee.FeatureCollection([featurestats]);
+  return image_Stats // put FeatStats or image_Stats here
+});
+
+//print('histogram data',pixelHist)
+var pixelCountList = pixelCounter.aggregate_array('pixelCount');
+print('list',pixelCountList)
+print('arraylength',pixelCountList.length())
+print('slice', pixelCountList.slice({start: 1, end: 2, step: 1})); // this is the second item in the list
+
+var featureCollection = ee.FeatureCollection(pixelCountList
+                        .map(function(element){
+                        return ee.Feature(null,{prop:element})}))
+
+print(featureCollection)
+
+// Get a list of the dates.
+
+Export.table.toDrive({
+  collection: ee.FeatureCollection(pixelCountList),
+  folder: 'GEE',
+  description:'featureCollection_pixelCountList',
+  fileFormat: 'CSV'
+});
+
+///////////////////
+
+
+// COUNT EACH PIXEL VALUE FREQUENCY (ZONAL STATS)
+var Histogram_featureCollection = ee.FeatureCollection(snowmap.map(function(image){
+  var stats = image.reduceRegion({
+  reducer: ee.Reducer.frequencyHistogram(),
+  geometry: norwayShape,
+  scale: 30,
+  maxPixels: 1e15});
+  //var image_Stats = image.set('pixelCount', stats) 
+  var featurestats = ee.Feature(null, {'pixelCount': stats});
+  //var FeatStats = ee.FeatureCollection([featurestats]);
+  return featurestats; // if i return FeatStats and export, the data table is empty
+}));
+
+print(Histogram_featureCollection)
+
+// Get a list of the dates.
+Export.table.toDrive({
+  collection: Histogram_featureCollection,
+  folder: 'GEE',
+  description:'pixelHist',
+  selectors: ['system:index','DATE_ACQUIRED', 'pixelCount'],
+  fileFormat: 'CSV'
+});
+
+
