@@ -130,45 +130,10 @@ var pixelCounter = snowmap.map(function(image){
 var pixelCountList = pixelCounter.aggregate_array('pixelCount');
 
 
- // COUNT EACH PIXEL VALUE FREQUENCY (ZONAL STATS)
-var pixelHist = snowmap.map(function(image){
-  var stats = image.reduceRegion({
-  reducer: ee.Reducer.frequencyHistogram(),
-  geometry: geometry,
-  scale: 30,
-  maxPixels: 1e15})
-  var image_Stats = image.set('pixelCount', stats) 
-  var featurestats = ee.Feature(null, stats);
-  var FeatStats = ee.FeatureCollection([featurestats]);
-  return image_Stats // put FeatStats or image_Stats here
-});
-
-//print('histogram data',pixelHist)
-var pixelCountList = pixelCounter.aggregate_array('pixelCount');
-print('list',pixelCountList)
-print('arraylength',pixelCountList.length())
-print('slice', pixelCountList.slice({start: 1, end: 2, step: 1})); // this is the second item in the list
-
-var featureCollection = ee.FeatureCollection(pixelCountList
-                        .map(function(element){
-                        return ee.Feature(null,{prop:element})}))
-
-print(featureCollection)
-
-// Get a list of the dates.
-
-Export.table.toDrive({
-  collection: ee.FeatureCollection(pixelCountList),
-  folder: 'GEE',
-  description:'featureCollection_pixelCountList',
-  fileFormat: 'CSV'
-});
-
 ///////////////////
 
-
 // COUNT EACH PIXEL VALUE FREQUENCY (ZONAL STATS)
-var Histogram_featureCollection = ee.FeatureCollection(snowmap.map(function(image){
+var pixelHist = ee.FeatureCollection(snowmap.map(function(image){
   var stats = image.reduceRegion({
   reducer: ee.Reducer.frequencyHistogram(),
   geometry: norwayShape,
@@ -180,11 +145,11 @@ var Histogram_featureCollection = ee.FeatureCollection(snowmap.map(function(imag
   return featurestats; // if i return FeatStats and export, the data table is empty
 }));
 
-print(Histogram_featureCollection)
+print(pixelHist)
 
 // Get a list of the dates.
 Export.table.toDrive({
-  collection: Histogram_featureCollection,
+  collection: pixelHist,
   folder: 'GEE',
   description:'pixelHist',
   selectors: ['system:index','DATE_ACQUIRED', 'pixelCount'],
