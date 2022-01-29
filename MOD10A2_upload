@@ -1,0 +1,86 @@
+//Map.addLayer(imageCollection)
+//print(imageCollection)
+
+
+var norwayShape = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017')
+  .filter(ee.Filter.eq('country_na', 'Norway'))
+
+// could mosaic them together based off a dictionary of dates
+
+Map.addLayer(SCAcoll)
+Map.setCenter(-7.19, 60.54, 3)
+
+////////// mosaic by day 
+// the function is from this website: https://gis.stackexchange.com/questions/280156/mosaicking-image-collection-by-date-day-in-google-earth-engine
+
+function mosaicByDate(imcol){
+  // imcol: An image collection
+  // returns: An image collection
+  var imlist = imcol.toList(imcol.size())
+
+  var unique_dates = imlist.map(function(im){
+    return ee.Image(im).date().format("YYYY-MM-dd")
+  }).distinct()
+
+  var mosaic_imlist = unique_dates.map(function(d){
+    d = ee.Date(d)
+
+    var im = imcol
+      .filterDate(d, d.advance(1, "day"))
+      .mosaic()
+
+    return im.set(
+        "system:time_start", d.millis(), 
+        "system:id", d.format("YYYY-MM-dd"))
+  })
+
+  return ee.ImageCollection(mosaic_imlist)
+}
+
+var SCA_mosaic = mosaicByDate(SCAcoll)
+print(SCA_mosaic)
+
+var SCAmosaicOneDay = mosaicByDate(SCAoneDay)
+Map.addLayer(SCAoneDay)
+
+/// clip to Norway and get histogram info
+// 
+
+var pixelCounter_SCA = SCA_mosaic.map(function(image){
+  return image.set('pixelCount', image.reduceRegion({
+  reducer: ee.Reducer.frequencyHistogram().unweighted(),
+  geometry: norwayShape.geometry(),
+  crs: 'EPSG:4326',
+  scale: 500,
+  maxPixels: 1e9}))
+});
+
+var pixelCountList_SCA = pixelCounter_SCA.aggregate_array('pixelCount');
+print(pixelCountList_SCA)
+
+var pixelHist_SCA = ee.FeatureCollection(SCA_mosaic.map(function(image){
+  var stats = image.reduceRegion({
+  reducer: ee.Reducer.frequencyHistogram(),
+  geometry: norwayShape,
+  scale: 500,
+  maxPixels: 1e15});
+  //var image_Stats = image.set('pixelCount', stats) 
+  var featurestats = ee.Feature(null, {'pixelCount': stats, 'date': image.date()});
+  //var FeatStats = ee.FeatureCollection([featurestats]);
+  return featurestats; // if i return FeatStats and export, the data table is empty
+}));
+//'DATE_ACQUIRED':image.get()
+
+print(pixelHist_SCA)
+
+// Get a list of the dates.
+Export.table.toDrive({
+  collection: pixelHist_SCA,
+  folder: 'GEE',
+  description:'pixelHist_SCA',
+  selectors: ['system:index','date', 'pixelCount'],
+  fileFormat: 'CSV'
+});
+
+print(SCA_mosaic.first().get('system:time_start'))
+print(SCA_mosaic.first().date())
