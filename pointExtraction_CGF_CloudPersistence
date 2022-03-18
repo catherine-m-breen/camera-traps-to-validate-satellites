@@ -1,0 +1,205 @@
+
+
+var imageCollection = ee.ImageCollection("users/catherinembreen/MODCGF_year1_JanFeb"),
+    imageCollection2 = ee.ImageCollection("users/catherinembreen/MODCGF_year1_MarApr"),
+    imageCollection3 = ee.ImageCollection("users/catherinembreen/MODCGF_year2_JanFeb"),
+    imageCollection4 = ee.ImageCollection("users/catherinembreen/MODCGF_year2_MarApr"),
+    imageCollection5 = ee.ImageCollection("users/catherinembreen/MODCGF_year2_OctNovDec"),
+    imageCollection6 = ee.ImageCollection("users/catherinembreen/MODCGF_year3_JanFeb"),
+    imageCollection7 = ee.ImageCollection("users/catherinembreen/MODCGF_year3_MarApr"),
+    imageCollection8 = ee.ImageCollection("users/catherinembreen/MODCGF_year3_OctNovDec"),
+    imageCollection9 = ee.ImageCollection("users/catherinembreen/MODCP_year1_JanFeb"),
+    imageCollection10 = ee.ImageCollection("users/catherinembreen/MODCP_year1_MarApr"),
+    imageCollection11 = ee.ImageCollection("users/catherinembreen/MODCP_year2_JanFeb"),
+    imageCollection12 = ee.ImageCollection("users/catherinembreen/MODCP_year2_MarApr"),
+    imageCollection13 = ee.ImageCollection("users/catherinembreen/MODCP_year2_OctNovDec"),
+    imageCollection14 = ee.ImageCollection("users/catherinembreen/MODCP_year3_JanFeb"),
+    imageCollection15 = ee.ImageCollection("users/catherinembreen/MODCP_year3_MarApr"),
+    imageCollection16 = ee.ImageCollection("users/catherinembreen/MODCP_year3_OctNovDec"),
+    points = ee.FeatureCollection("users/catherinembreen/ScandCam_AllCameras_05072020_XYTableToPoint");
+
+
+///////// LOAD DATASETS //////////////
+
+var MOD101AF_CGF = imageCollection.merge(imageCollection2)
+                  .merge(imageCollection3)
+                  .merge(imageCollection4)
+                  .merge(imageCollection5)
+                  .merge(imageCollection6)
+                  .merge(imageCollection7)
+                  .merge(imageCollection8);
+
+var MOD101AF_CP = imageCollection.merge(imageCollection9)
+                  .merge(imageCollection10)
+                  .merge(imageCollection11)
+                  .merge(imageCollection12)
+                  .merge(imageCollection13)
+                  .merge(imageCollection14)
+                  .merge(imageCollection16);
+
+var MOD10A1 = ee.ImageCollection('MODIS/006/MOD10A1')
+                  .filter(ee.Filter.date('2018-01-01', '2020-05-30'))
+                  .select(['NDSI_Snow_Cover']);
+                
+
+var norwayShape = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017')
+  .filter(ee.Filter.eq('country_na', 'Norway'))
+
+var snowCoverVis = {min: 0.0, max: 100.0, palette: ['black', '0dffff', '0524ff', 'ffffff'],};
+
+var points = points.map(function(feature) {return ee.Feature(feature.geometry(), {'LokalitetID': feature.get('LokalitetID')})})
+
+Map.setCenter(-7.19, 60.54, 3)
+
+/////// projection for uploaded data //// 
+//this makes it any better// 
+var proj4string = '\
+PROJCS["MODIS Sinusoidal", \
+    GEOGCS["WGS 84", \
+        DATUM["WGS_1984", \
+            SPHEROID["WGS 84",6378137,298.257223563, \
+                AUTHORITY["EPSG","7030"]], \
+            AUTHORITY["EPSG","6326"]], \
+        PRIMEM["Greenwich",0, \
+            AUTHORITY["EPSG","8901"]], \
+        UNIT["degree",0.01745329251994328, \
+            AUTHORITY["EPSG","9122"]], \
+        AUTHORITY["EPSG","4326"]], \
+    PROJECTION["Sinusoidal"], \
+    PARAMETER["false_easting",0.0], \
+    PARAMETER["false_northing",0.0], \
+    PARAMETER["central_meridian",0.0], \
+    PARAMETER["semi_major",6371007.181], \
+    PARAMETER["semi_minor",6371007.181], \
+    UNIT["m",1.0], \
+    AUTHORITY["SR-ORG","6974"]]'; 
+    
+//var projSRORG = ee.Projection(proj4string); // didn't help
+//print('wkt',projSRORG)
+
+
+
+////////// MOSAIC BY DAY /////////////////// 
+// the function is from this website: 
+// https://gis.stackexchange.com/questions/280156/mosaicking-image-collection-by-date-day-in-google-earth-engine
+
+function mosaicByDate(imcol){
+  // imcol: An image collection
+  // returns: An image collection
+  var imlist = imcol.toList(imcol.size())
+
+  var unique_dates = imlist.map(function(im){
+    return ee.Image(im).date().format("YYYY-MM-dd")
+  }).distinct()
+
+  var mosaic_imlist = unique_dates.map(function(d){
+    d = ee.Date(d)
+
+    var im = imcol
+      .filterDate(d, d.advance(1, "day"))
+      .mosaic()
+
+    return im.set(
+        "system:time_start", d.millis(), 
+        "system:id", d.format("YYYY-MM-dd"))
+  })
+
+  return ee.ImageCollection(mosaic_imlist)
+}
+
+// first step: reproject 
+
+var MOD101AF_CGFreproject = MOD101AF_CGF.map(function(img){
+  return img.reproject(proj4string)//'SR-ORG:6974', null, 463.31271652770823)
+})
+
+var MOD101AF_CPreproject = MOD101AF_CP.map(function(img){
+  return img.reproject(proj4string)//'SR-ORG:6974', null, 463.31271652770823)
+})
+
+// next step: mosaic by date
+var MOD101AF_CGFmosaic = mosaicByDate(MOD101AF_CGFreproject)
+
+var MOD101AF_CPmosaic = mosaicByDate(MOD101AF_CPreproject)
+
+/// clip to Norway and get histogram info
+//
+
+/////////////// POINT EXTRACTION /////////////
+// here is the documentation
+// https://developers.google.com/earth-engine/tutorials/community/extract-raster-values-for-points
+
+
+var resultsGEE = MOD10A1.map(function(image) {
+    return image.reduceRegions({
+      collection: ee.FeatureCollection(points.select(['LokalitetID'])), 
+      reducer: ee.Reducer.mean(), 
+      scale: 30 
+    }).filter(ee.Filter.neq('mean', null)) //** i think this is why I was getting weird values for the GEE extraction
+    .map(function(f) {
+    f = f.set(f.toDictionary().combine({mean: 250}, false)) // 250 is cloud in other dataset
+    return f.set('imageId', image.date());
+});
+}).flatten()
+
+Export.table.toDrive({
+  collection: resultsGEE,
+  description: 'resultsGEE_alldates', 
+  fileFormat: 'CSV'
+  });
+
+var MOD101AF_CGFmosaicPoints = MOD101AF_CGFmosaic.map(function(image) {
+  return image.reduceRegions({
+    collection: ee.FeatureCollection(points.select(['LokalitetID'])), // all cameras 
+    reducer: ee.Reducer.mean(), 
+    scale: 30 // this was 500 but it was off with MODIS NDSI so trying at 30 
+  }).filter(ee.Filter.neq('mean', null)) //** i think this is why I was getting weird values for the GEE extraction
+    .map(function(f) {
+    f = f.set(f.toDictionary().combine({mean: 300}, false)) // 250 is cloud in other dataset
+    return f.set('imageId', image.date());
+});
+}).flatten()
+
+//print('a1default_points',a1default_points.limit(10))
+
+Export.table.toDrive({
+  collection: MOD101AF_CGFmosaicPoints,
+  description: 'MOD101AF_CGFmosaic_projSRORG2', 
+  fileFormat: 'CSV'
+  });
+
+var MOD101AF_CPmosaicPoints = MOD101AF_CPmosaic.map(function(image) {
+  return image.reduceRegions({
+    collection: ee.FeatureCollection(points.select(['LokalitetID'])), // all cameras 
+    reducer: ee.Reducer.mean(), 
+    scale: 30 // this was 500 but it was off with MODIS NDSI so trying at 30 
+  }).filter(ee.Filter.neq('mean', null)) //** i think this is why I was getting weird values for the GEE extraction
+    .map(function(f) {
+    f = f.set(f.toDictionary().combine({mean: 300}, false)) // 250 is cloud in other dataset
+    return f.set('imageId', image.date());
+});
+}).flatten()
+
+//print('a1default_points',a1default_points.limit(10))
+
+Export.table.toDrive({
+  collection: MOD101AF_CPmosaicPoints,
+  description: 'MOD101AF_CPmosaic_projSRORG2', 
+  fileFormat: 'CSV'
+  });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
