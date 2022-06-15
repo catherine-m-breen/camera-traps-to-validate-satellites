@@ -54,10 +54,9 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 
 from google.colab import drive
-drive.mount('/content/gdrive')
+drive.mount('/content/drive')
 
-# Commented out IPython magic to ensure Python compatibility.
-# %cd {'gdrive/My Drive/ImageSegmentation'}
+#%cd {'gdrive/My Drive/ImageSegmentation'}
 
 """**bold text**## Download the Oxford-IIIT Pets dataset
 
@@ -68,16 +67,16 @@ The dataset is [available from TensorFlow Datasets](https://www.tensorflow.org/d
 
 inputImages = []
 inputImagesNames = []
-for file in glob.glob(os.path.join("InputImage/*")):
+for file in glob.glob("drive/My Drive/ImageSegmentation/InputImage/*"):
   if os.path.splitext(file)[1].lower() in ('.jpg', '.jpeg'):
-    filename = file.split('/',1)[1]
+    filename = file.split('/')[-1]
     image = cv2.imread(file)
     inputImages.append(image)
     inputImagesNames.append(filename)
 
 maskedImages = []
 maskedImagesNames = []
-for file in glob.glob(os.path.join("TrueMask/*")):
+for file in glob.glob("drive/My Drive/ImageSegmentation/TrueMask/*"):
   if os.path.splitext(file)[1].lower() in ('.jpg', '.jpeg'):
     image = cv2.imread(file)
     maskedImages.append(image)
@@ -86,8 +85,6 @@ for file in glob.glob(os.path.join("TrueMask/*")):
     ending = (filename.split('.')[1]).upper()
     filename = name + '.' + ending
     maskedImagesNames.append(filename)
-
-filename
 
 ## glob doesn't always work in the same order so we want to be sure that everything is in the same order, we will sort by name (ascending) and then make sure everything lines up 
 def sortMasks(inputImages, inputImagesNames, maskedImages, maskedImagesNames):
@@ -118,7 +115,7 @@ def sortMasks(inputImages, inputImagesNames, maskedImages, maskedImagesNames):
 
 inputImages, inputImagesNames, maskedImages, maskedImagesNames = sortMasks(inputImages, inputImagesNames, maskedImages, maskedImagesNames)
 
-r = 21
+r = 20
 display([inputImages[r], maskedImages[r]])
 
 """### Generic function to load images
@@ -134,24 +131,28 @@ def load_image(image, mask):
   input_image = tf.cast(input_image, tf.float32) / 255.0
   return input_image, input_mask
 
-x_data = []
-#y_data1 = []
-#y_data2 = []
-y_data = []
-for i in range(0, len(inputImages)):
-  x, y = load_image(inputImages[i], maskedImages[i])
-  y = y[:,:,0]//255
-  y1 = tf.cast(y, dtype = tf.uint16)
-  y2 = tf.bitwise.invert(y1)
-  y2= y2[:,:]//65535 ## I don't know why it's doing that but it works if you divide it by 65535. We may need to convert back to float 32
-  #(print(x.shape))
-  t1 = y1 ### snow
-  t2 = y2 ### no snow
-  stack = tf.stack([y2, y1], 2) ## channel 0 = no snow; channel 2 = snow
-  x_data.append(x)
-  #y_data1.append(y1)
-  #y_data2.append(y2)
-  y_data.append(stack)
+def Preprocessing(inputImages, maskedImages):
+  x_data = []
+  #y_data1 = []
+  #y_data2 = []
+  y_data = []
+  for i in range(0, len(inputImages)):
+    x, y = load_image(inputImages[i], maskedImages[i])
+    y = y[:,:,0]//255
+    y1 = tf.cast(y, dtype = tf.uint16)
+    y2 = tf.bitwise.invert(y1)
+    y2= y2[:,:]//65535 ## I don't know why it's doing that but it works if you divide it by 65535. We may need to convert back to float 32
+    #(print(x.shape))
+    t1 = y1 ### snow
+    t2 = y2 ### no snow
+    stack = tf.stack([y2, y1], 2) ## channel 0 = no snow; channel 2 = snow
+    x_data.append(x)
+    #y_data1.append(y1)
+    #y_data2.append(y2)
+    y_data.append(stack)
+  return x_data, y_data
+
+x_data, y_data = Preprocessing(inputImages, maskedImages)
 
 """Here is an example of how the dataset is two channels of inverted masks of each other.
 
@@ -347,6 +348,82 @@ for i in range(0, len(x_train)):
 k = 1
 display([x_train[1], y_train[1][:,:,1], prediction[1]])
 
+"""## Model Performance Evaluation
+F1 score, accuracy and precision between true mask and predicted mask
+
+Precision: the percentage of snow classifications predicted by our model that are also snow classifications in the true mask.
+ precision = (True Positives / True Positives + False Positives) 
+
+Recall: the percentage of true snow classifications predicted by our model that are also true snow classifications in the compared dataset
+  recall = (True Positives) / (True Positives + False Negatives) 
+
+FScore: The harmonic mean of precision and recall. 
+  FScore = 2 * (Precision X Recall) / (Precision + Recall) 
+
+
+"""
+
+p = tf.keras.metrics.Precision()
+p.update_state([y_train[1][:,:,1]], [prediction[1]])
+precision = p.result().numpy()
+precision
+
+m = tf.keras.metrics.Recall()
+m.update_state([y_train[1][:,:,1]], [prediction[1]])
+recall = m.result().numpy()
+
+#Fscore 
+Fscore = 2 * (precision * recall)/(precision + recall)
+
+def modelEvaluation(trueMask, predictedMask):
+  p = tf.keras.metrics.Precision()
+  p.update_state([trueMask], [predictedMask])
+  precision = p.result().numpy()
+  m = tf.keras.metrics.Recall()
+  m.update_state([trueMask], [predictedMask])
+  recall = m.result().numpy()
+  Fscore = 2 * (precision * recall)/(precision + recall)
+  if recall == 0:
+    Fscore = 0
+  return  precision, recall, Fscore
+
+modelEvaluation(trueMask = y_train[1][:,:,1], predictedMask = prediction[1])
+
+precision, recall, Fscore = [], [], []
+for i in range(0, len(x_train)):
+  precision1, recall1, Fscore1 = modelEvaluation(trueMask = y_train[i][:,:,1], predictedMask = prediction[i])
+  precision.append(precision1)
+  recall.append(recall1)
+  Fscore.append(Fscore1)
+
+print(np.mean(precision))
+print(np.mean(recall))
+print(np.mean(Fscore))
+
+Fscore
+
+modelEvaluation(trueMask = y_train[11][:,:,1], predictedMask = prediction[11])
+
+display([y_train[11][:,:,1], prediction[11]])
+
+"""## White Pixel Fraction"""
+
+image = prediction[1]
+height, width = image.shape
+print(image.shape)
+bottom_half = round(height/2)
+
+  #plt.imshow(image[(round(height/2)):height,:]) just bottom half 
+    # errors include (trees, animal in image, etc)
+cropped = image[(round(height/2)):(height-10),:] ## above 10 pixels of the bottom ribbon
+plt.imshow(cropped)
+
+width, height = cropped.shape
+white_pixel_fraction = (np.sum(cropped))/(width *height)
+white_pixel_fraction
+
+width *height
+
 #image = tf.expand_dims(x_train[5], axis=0) #x_train[0:1,:]
 #pred_mask = model.predict(image)
 #print(pred_mask.shape) ## probabilities
@@ -364,9 +441,56 @@ display([x_train[1], y_train[1][:,:,1], prediction[1]])
 """
 
 ## load in the Labeled Images 
-path = 
-for file in glob.glob(os.path.join("*")):
+path = 'drive/My Drive/LabeledImages/'
+originalData = []
+unseenData = []
+filenames = []
+for file in glob.glob(os.path.join(path + "*")):
+  #print(file)
   if os.path.splitext(file)[1].lower() in ('.jpg', '.jpeg'):
+    image = cv2.imread(file)
+    input_image = tf.image.resize(image, (128, 128))
+    input_image = tf.cast(input_image, tf.float32) / 255.0
+    originalData.append(input_image)
+    output = make_predictions(input_image)
+    unseenData.append(output)
+
+path = 'drive/My Drive/LabeledImages/'
+filenames = []
+for file in glob.glob(os.path.join(path + "*")):
+  #print(file)
+  if os.path.splitext(file)[1].lower() in ('.jpg', '.jpeg'):
+    image = cv2.imread(file)
+    filename = file.split('/')[-1]
+    filenames.append(filename)
+
+filenames
+
+f = 8000
+display([originalData[f], unseenData[f]])
+
+## count pixels
+fractions = []
+for i in range(0, len(unseenData)):
+  image = unseenData[i]
+  height, width = image.shape
+  #print(image.shape)
+  bottom_half = round(height/2)
+  #plt.imshow(image[(round(height/2)):height,:]) just bottom half 
+    # errors include (trees, animal in image, etc)
+  cropped = image[(round(height/2)):(height-10),:]
+  width, height = cropped.shape
+  white_pixel_fraction = (np.sum(cropped))/(width *height)
+  fractions.append(white_pixel_fraction)
+
+df.to_csv("AI_fractions.csv", index=False)
+
+df = pd.DataFrame({"filename" : filenames, "whitePixelIndexAI" : fractions})
+df.to_csv("drive/My Drive/AI_fractions.csv", index=False)
+
+df.head()
+
+os.getcwd()
 
 """## Optional: Imbalanced classes and class weights
 
