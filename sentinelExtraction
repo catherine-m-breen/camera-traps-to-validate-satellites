@@ -2,9 +2,7 @@
 /// These are the GEE versions of these steps
 // https://github.com/acannistra/planet-snowcover/blob/master/experiments/ASO_Tuolumne/scripts/get_sentinel.py
 
-var norwayShape = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017')
-  .filter(ee.Filter.eq('country_na', 'Norway'))
-
+//***** INSERT POINTS BELOW****/////
 var locs = ee.FeatureCollection("users/catherinembreen/ScandCam_AllCameras_05072020_XYTableToPoint");
 Map.addLayer(locs)
 /**
@@ -66,8 +64,7 @@ var dataset = ee.ImageCollection('COPERNICUS/S2_SR')
                   // Pre-filter to get less cloudy granules.
                   .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',20))
                   .map(maskS2clouds)
-                  .filterBounds(locs) //norwayShape
-                 // .map(function(image){return image.clip(norwayShape)}) 
+                  .filterBounds(locs) 
                   .select(["B3","B11", "MSK_SNWPRB"])
 
 
