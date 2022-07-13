@@ -1,0 +1,137 @@
+
+/// These are the GEE versions of these steps
+// https://github.com/acannistra/planet-snowcover/blob/master/experiments/ASO_Tuolumne/scripts/get_sentinel.py
+
+var norwayShape = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017')
+  .filter(ee.Filter.eq('country_na', 'Norway'))
+
+var locs = ee.FeatureCollection("users/catherinembreen/ScandCam_AllCameras_05072020_XYTableToPoint");
+Map.addLayer(locs)
+/**
+ * Function to mask clouds using the Sentinel-2 QA band
+ * @param {ee.Image} image Sentinel-2 image
+ * @return {ee.Image} cloud masked Sentinel-2 image
+ * This code has been edited to add " .copyProperties(qa).set('system:time_start', qa.get('system:time_start'))" 
+ * because when we masked we lost it's original properties according to this stack exchange post: 
+ * https://gis.stackexchange.com/questions/321579/error-when-trying-to-create-a-doy-band-on-an-imagecollection-in-google-earth-eng
+ * copy properties is also here: https://gis.stackexchange.com/questions/424582/google-earth-engine-sentinel-5p-so2
+ */
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+      .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+
+  return image.updateMask(mask)
+  .divide(10000)
+  .copyProperties(qa).set('system:time_start', qa.get('system:time_start'));
+}
+
+/**
+ * Function to mosaic sentinel images by date
+ */
+// Function to mosaic by date, orbit, etc
+function mosaicByDate(imcol){
+  // imcol: An image collection
+  // returns: An image collection
+  var imlist = imcol.toList(imcol.size())
+
+  var unique_dates = imlist.map(function(im){
+    return ee.Image(im).date().format("YYYY-MM-dd")
+  }).distinct()
+
+  var mosaic_imlist = unique_dates.map(function(d){
+    d = ee.Date(d)
+
+    var im = imcol
+      .filterDate(d, d.advance(1, "day"))
+      .mosaic()
+
+    return im.set(
+        "system:time_start", d.millis(), 
+        "system:id", d.format("YYYY-MM-dd"))
+  })
+
+  return ee.ImageCollection(mosaic_imlist)
+}
+
+
+var dataset = ee.ImageCollection('COPERNICUS/S2_SR')
+                  .filterDate('2020-01-01', '2020-03-30')
+                  // Pre-filter to get less cloudy granules.
+                  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',20))
+                  .map(maskS2clouds)
+                  .filterBounds(locs) //norwayShape
+                 // .map(function(image){return image.clip(norwayShape)}) 
+                  .select(["B3","B11", "MSK_SNWPRB"])
+
+
+print(dataset)
+var datasetMosaic = mosaicByDate(dataset)
+
+// We have to resample B11 from 20m to 10m to match B3. 
+function resampleB11(img){
+  var B11 = img.select(["B11"])
+  var B11_10m = B11.resample('bicubic') //.reproject(**{'crs': crs,'scale': 10.0})
+  return ee.Image.cat([img, B11_10m]).rename(["B3", "B11", "snowProb", "B11_10m"])
+  }
+
+var datasetMosaicResampledB11 = datasetMosaic.map(resampleB11)
+//print(datasetMosaicResampledB11)
+//print(datasetMosaic)
+
+function NDSI(img){
+  var ndsi = img.normalizedDifference(["B3","B11"]).rename("ndsi")
+  
+  return ee.Image.cat([img,ndsi])
+}
+
+function NDSI_10m(img){
+  var ndsi = img.normalizedDifference(["B3","B11_10m"]).rename("ndsi_10m")
+  
+  return ee.Image.cat([img,ndsi])
+}
+
+var snow10m = datasetMosaicResampledB11.map(NDSI_10m).select("ndsi_10m")
+print(snow10m)
+
+var snow = datasetMosaicResampledB11.map(NDSI).select("ndsi")
+print(snow10m)
+
+Map.setCenter(11.11, 60.373, 5);
+
+Map.addLayer(snow.first())
+Map.addLayer(snow10m.first())
+
+/////////////// POINT EXTRACTION /////////////
+// here is the documentation
+// https://developers.google.com/earth-engine/tutorials/community/extract-raster-values-for-points
+
+var points = locs.map(function(feature) {
+  return ee.Feature(feature.geometry(), {'LokalitetID': feature.get('LokalitetID')})
+})
+
+var sentinelPoint = snow10m.map(function(image) {
+  return image.reduceRegions({
+    collection: ee.FeatureCollection(points.select(['LokalitetID'])), // all cameras 
+    reducer: ee.Reducer.mean(), 
+    scale: 10 // this was 500 but it was off with MODIS NDSI so trying at 30 
+  }).filter(ee.Filter.neq('mean', null))
+    .map(function(f) { 
+    return f.set('imageId', image.date());
+    });
+}).flatten();
+
+//print('a1default_points',a1default_points.limit(10))
+
+Export.table.toDrive({
+  collection: sentinelPoint,
+  description: 'sentinelPoint_test', 
+  fileFormat: 'CSV'
+  });
+
