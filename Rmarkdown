@@ -1,0 +1,728 @@
+---
+title: "cameraSatellite_analysis"
+author: "Catherine Breen"
+date: "1/13/2022"
+output: html_document
+---
+
+This notebook is to investigate the following research questions:
+
+How can we use camera traps to supplement MODIS Snow Products on cloudy days and in forests? 
+
+1. How well do camera traps and MOD10A1 values agree? Does vegetation influence agreement?
+2. How well do camera traps and MOD10A1F (on cloudy days) agree? Do the number of consecutive cloudy days influence agreement?
+3. If we increase the spatial resolution, does that increase agreement? 
+
+If vegetation and clouds decrease agreement, camera traps could supplement by improving ground information to inform snow analysis for ecologists. 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load necessary libraries
+
+Plotting: grid, ggplot2, gridExtra
+Statistics: pROC, lme4, MuMIn, mgcv, caret 
+Data cleaning: abind, caret??
+
+```{r, include=FALSE}
+library(gtable)
+library(grid)
+library(gridExtra)
+library(abind)
+library(ggplot2)
+library(pROC)
+library(lme4)
+library(MuMIn)
+library(mgcv)
+library(caret)
+library(tidyr)
+library(dplyr)
+library(lmerTest)
+library(lubridate)
+```
+
+## Load data and include cameraID 
+(the norwegian word is LokalitetID) as a factor. It will be used as a random effect later on. 
+
+The data was cleaned first in python to remove duplicate photos. The final dataframe includes variables that affect the sensor (NDVI, treecanopy) and
+ground conditions (saturation, e.g. day or night).
+
+
+## rematch MOD10A1F with the data_cgf data just in case 
+
+colnames are 
+ [1] "dateFormatted"     "LokalitetID"       "File"              "Date"              "Time"              "SnowCover"        
+ [7] "NDVImodis"         "treecanopycover"   "Latitude"          "Longitude"         "mean"              "labels"           
+[13] "binary.labels"     "Cloud_Persistence" "CGF_NDSI" 
+
+
+# MOD10A1 + camera data 
+#### cleaned in python
+
+```{r}
+
+data_csv <- read.csv('~/Documents/RemoteSensingPaper/datasets/data_wCovariates_October12-2021.csv')
+data <- data_csv[,c("File", "LokalitetID","Date", "Time", "SnowCover","NDSImodis", "NDVImodis","treecanopycover", "Latitude","Longitude")]
+data$LokalitetID <- factor(data$LokalitetID)
+saturation <- read.csv('~/Documents/RemoteSensingPaper/datasets/saturation_sort_results.csv')
+data <- merge(data, saturation, by.x = 'File', by.y = 'filename', all.x = TRUE)
+print(cor(data$NDSImodis, data$SnowCover)) ##0.81
+
+data$dateFormatted <- as.POSIXct(as.Date(data$Date,format='%m/%d/%y'))
+rm(data_csv,  NDVImax, saturation, lat)
+
+print(length(unique(data$LokalitetID))) ##665 cameras
+
+```
+
+# MOD10A1F + camera data 
+#### cleaned in python
+
+```{r}
+
+### random subset ###
+data_cgf_csv <- read.csv("~/Documents/RemoteSensingPaper/datasets/cgfdata_wCovariates_October12-2021_30scale.csv")
+data_cgf_csv <- data_cgf_csv[,c("File", "LokalitetID","Date", "Time", "SnowCover")]
+data_cgf_csv <- distinct(data_cgf_csv, LokalitetID,Date, .keep_all= TRUE)
+#cor(df$SnowCover, df$mean) ## 0.81
+data_cgf_csv$Date <- as.POSIXct(data_cgf_csv$Date) ##
+data_cgf_csv <- data_cgf_csv[,c("File", "LokalitetID","Date", "Time", "SnowCover")]
+### tanvi images ### would need to do a kappa statistic 
+
+length(unique(data_cgf_csv$Date))
+hist(data_cgf_csv$Date, breaks = 376)
+length(unique(data$Date))
+
+
+
+##########################
+tanvi_images <- read.csv('/Users/catherinebreen/Documents/RemoteSensingPaper/datasets/tanvi_labeled_images_cgf.csv')
+tanvi_images <- tanvi_images[tanvi_images$PoorQualilty == FALSE,]
+tanvi_images <- tanvi_images[,c("File", "Date", "Time", "SnowCover")]
+tanvi_images$LokalitetID <- sapply(strsplit(tanvi_images$File,"_"), getElement, 1)
+tanvi_images$Date <- dmy(tanvi_images$Date)
+
+
+
+combined <- rbind(tanvi_images, data_cgf_csv)
+combined <- distinct(combined, File, .keep_all = TRUE)
+combined <- distinct(combined, LokalitetID, Date, .keep_all = TRUE)
+
+rm(tanvi_images)
+###############################
+
+print(length(unique(combined$LokalitetID))) ##775
+
+################### need this #############################
+MOD10A1F_CP <- read.csv('~/Documents/RemoteSensingPaper/datasets/MOD101AF_CPmosaic_projSRORG.csv')
+MOD10A1F_CP$dateFormatted <- sapply(strsplit(MOD10A1F_CP$imageId,"T"), getElement, 1)
+MOD10A1F_CP$dateFormatted<- as.POSIXct(MOD10A1F_CP$dateFormatted)
+
+MOD10A1F_CGF <- read.csv('~/Documents/RemoteSensingPaper/datasets/MOD101AF_CGFmosaic_projSRORG.csv') #read.csv('/Users/catherinebreen/Downloads/CGFtest_date_30scale.csv')#
+MOD10A1F_CGF$dateFormatted <- as.POSIXct(sapply(strsplit(MOD10A1F_CGF$imageId,"T"), getElement, 1))
+MOD10A1F <- merge(MOD10A1F_CP, MOD10A1F_CGF, by.x = c("LokalitetID", "dateFormatted"), by.y = c("LokalitetID", "dateFormatted"))
+MOD10A1F <- MOD10A1F[,-c(3:4,6:8,10)]
+colnames(MOD10A1F) <- c('LokalitetID', 'dateFormatted', 'Cloud_Persistence', 'CGF_NDSI')    
+MOD10A1F <- dplyr::filter(MOD10A1F, (dateFormatted >= as.POSIXct('2017-10-01') & dateFormatted <= as.POSIXct('2018-04-01')) |
+                            dateFormatted >= as.POSIXct('2018-10-01') & dateFormatted <= as.POSIXct('2019-04-01') |
+                            dateFormatted >= as.POSIXct('2019-10-01') & dateFormatted <= as.POSIXct('2020-04-01')) ##
+MOD10A1F <- na.omit(MOD10A1F) ## won't do anything
+rm(MOD10A1F_CGF, MOD10A1F_CP)
+
+CGFdata <- merge(combined, MOD10A1F, by.x= c("Date", "LokalitetID"), by.y = c("dateFormatted", "LokalitetID"))
+print(nrow(CGFdata)) #10374
+colnames(CGFdata)
+CGFdata <- CGFdata[!is.na(CGFdata$CGF_NDSI),] ## none are found
+CGFdata <- CGFdata[!duplicated(CGFdata$File), ]
+CGFdata <- CGFdata[CGFdata$CGF_NDSI <= 100,] ## 10,171
+CGFdata <- na.omit(CGFdata)
+cor(CGFdata$CGF_NDSI, CGFdata$SnowCover) ### 0.6735176 ## 0.69 ## 0.81
+print(nrow(CGFdata)) ## 10171
+
+rm(data_cgf_csv, data_csv, combined, saturation)
+
+hist(MOD10A1F$Cloud_Persistence, n = 50)
+hist(CGFdata$Cloud_Persistence, n = 30)
+
+```
+
+#### Data summary
+## Alternative way to do histograms put columns side by side
+
+```{r}
+## transform today into long format
+
+
+hist_function <- function(data) {
+  ## transform today into long format
+  histogramData <- data[, c("LokalitetID", "SnowCover", "NDSImodis")]
+  colnames(histogramData) <-
+    c('LokalitetID', 'camera', 'MODIS\nsatellite')
+  
+  histogramData$camera <-
+    replace(histogramData$camera, histogramData$camera == 1 , 25)
+  histogramData$camera <-
+    replace(histogramData$camera, histogramData$camera == 2 , 50)
+  histogramData$camera <-
+    replace(histogramData$camera, histogramData$camera == 3 , 75)
+  histogramData$camera <-
+    replace(histogramData$camera, histogramData$camera == 4 , 100)
+  
+  histogramDataLong <-
+    gather(histogramData, instrument, measurement, 2:3, factor_key = TRUE)
+  
+  breaks.major <- c(0, 15, 37.5, 52.5, 67.5, 82.5, 95, 100)
+  breaks.minor <- c(0, 25, 50, 75, 100)
+  labels.minor <- c("~0%", "~25%", "~50%", "~75%", "~100%")
+  
+  histograms <-
+    ggplot(histogramDataLong,
+           aes(x = measurement, color = instrument, fill = instrument)) + geom_histogram(
+             position = "dodge",
+             alpha = 0.3,
+             col = "black",
+             bins = 5
+           ) +
+    theme(
+      panel.background = element_blank(),
+      text = element_text(size = 10),
+      axis.line = element_line(colour = "black"),
+      legend.position = c(.5, .85),
+    ) + scale_x_continuous(name = 'snow value',
+                           labels = labels.minor,
+                           breaks = breaks.minor) +
+    scale_fill_manual(name = "instrument", values = c("#C7C9CB", "black"))  #+ geom_vline(xintercept=13, linetype="solid", color = "white", size=2)+
+  
+  return(histograms)
+}
+
+hist_function(data)
+
+#+
+#geom_vline(xintercept=20, linetype="solid", color = "white", size=2)+
+#etc
+
+```
+## overall agreement and distribution
+
+```{r}
+
+A1model <- lm(NDSImodis ~ SnowCover + I(SnowCover^2), data=data)  # build linear regression model on full data
+print(A1model)
+summary(A1model)
+A1_R2 <-  0.6959 
+
+A1Fmodel <- lm(CGF_NDSI ~ SnowCover + I(SnowCover^2), data=CGFdata)  # build linear regression model on full data
+print(A1Fmodel)
+summary(A1Fmodel)
+A1F_R2 <-  0.6845 ### this seems too low
+
+```
+
+
+### distribution and line of best fit
+
+```{r}
+
+# visualise predictions from best model
+# first create new data frames with explanatory values we wish to predict to
+
+boxplot_comparison <- function(data, linear_model, NDSI) {
+  newdat <-
+    data.frame(SnowCover = seq(min(data$SnowCover), max(data$SnowCover), by = 0.1),
+               NDSI = 50)
+  
+  # then predict from best model to new dataframe
+  prediction2 <- predict(linear_model, newdat, se.fit = T)
+  newdat <- newdat %>%
+    mutate(prediction = prediction2[[1]],  se = prediction2[[2]]) %>%
+    mutate(lower_ci = prediction - se * 1.96,
+           upper_ci = prediction + se * 1.96)
+  
+  ### line of best fit on boxplot
+  m <-
+    ggplot(data, aes(
+      x = as.factor(SnowCover),
+      y = NDSImodis,
+      fill = (SnowCover)
+    )) + geom_boxplot(size = .75) +
+    geom_line(
+      data = newdat,
+      aes(SnowCover + 1, prediction),
+      color = 'red',
+      size = 1.5
+    ) + theme(
+      text = element_text(size = 14),
+      panel.background = element_blank(),
+      axis.line = element_line(colour = "grey"),
+      axis.text.x = element_text(
+        angle = 0,
+        hjust = 0.5,
+        vjust = 1
+      ),
+      legend.position = "none"
+    ) + abline(a=0,b=1) + 
+    xlab("Image Labels") + ylab("NDSI Snow Cover") + scale_x_discrete(labels = c('~0%', "~25%", "~50%", "~75%", "~100%")) +
+    scale_fill_gradient(low = "gray28", high = "light grey") + labs(tag =
+                                                                      "A")
+  return(m)
+}
+
+#boxplot_comparison(data, A1model, NDSImodis)
+
+
+```
+
+
+### agreement 
+
+```{r}
+
+SnowCategoriesA1 <- data$SnowCover
+SnowCategoriesA1 <- replace(SnowCategoriesA1, data$SnowCover==1 , 25)
+SnowCategoriesA1 <- replace(SnowCategoriesA1, data$SnowCover==2 , 50)
+SnowCategoriesA1 <- replace(SnowCategoriesA1, data$SnowCover==3 , 75)
+SnowCategoriesA1 <- replace(SnowCategoriesA1, data$SnowCover==4 , 100)
+
+data['agreement'] <- 100 - abs(SnowCategoriesA1 - (data[,'NDSImodis']))
+
+n <- length(data$agreement)
+xbar <- mean(data$agreement)
+s <- sd(data$agreement)
+margin <- qt(0.95,df=n-1)*s/sqrt(n)
+lowerinterval <- xbar - margin
+upperinterval <- xbar + margin
+
+
+mean_CI_function <- function(data) {
+  #Calculate the mean of the sample data
+  mean_value <- mean(data$agreement)
+  # Compute the size
+  n <- length(data$agreement)
+  
+  # Find the standard deviation
+  standard_deviation <- sd(data$agreement)
+  
+  # Find the standard error
+  standard_error <- standard_deviation / sqrt(n)
+  alpha = 0.05
+  degrees_of_freedom = n - 1
+  t_score = qt(p = alpha / 2,
+               df = degrees_of_freedom,
+               lower.tail = F)
+  margin_error <- t_score * standard_error
+  
+  # Calculating lower bound and upper bound
+  lower_bound <- mean_value - margin_error
+  upper_bound <- mean_value + margin_error
+  
+  # Print the confidence interval
+  print(c(mean_value, lower_bound, upper_bound))
+}
+
+mean_CI_function(data)
+mean_CI_function(data[data$SnowCover == 0,])
+mean_CI_function(data[data$SnowCover == 4,])
+
+
+
+```
+
+### agreement boxplot
+
+```{r}
+
+H1_analysis <- function(data) {
+  H1_figure <-
+    ggplot(data = data, aes(
+      x = factor(SnowCover),
+      y = agreement,
+      fill = factor(SnowCover)
+    )) +
+    geom_boxplot(size = .75) +
+    theme(
+      text = element_text(size = 14),
+      panel.background = element_blank(),
+      axis.line = element_line(colour = "grey"),
+      axis.text.x = element_text(
+        angle = 0,
+        hjust = 0.5,
+        vjust = 1
+      ),
+      legend.position = "none"
+    ) +
+    scale_fill_manual(values = c("#333333", "#666666", "#999999", "#CCCCCC", "#EEEEEE")) +
+    xlab("Image Labels") + ylab("Agreement") + scale_x_discrete(labels = c('~0%', "~25%", "~50%", "~75%", "~100%")) +
+    labs(tag = "B")
+  
+  H1_model <- lm(agreement ~ poly(SnowCover, degree = 2), data = data)
+  
+  newdat_H1 <-
+    data.frame(SnowCover = seq(min(data$SnowCover), max(data$SnowCover), by = 0.1),
+               agreement = 50)
+  
+  # then predict from best model to new dataframe
+  prediction_H1 <- predict(H1_model, newdat_H1, se.fit = T)
+  newdat_H1 <- newdat_H1 %>%
+    mutate(prediction = prediction_H1[[1]],  se = prediction_H1[[2]]) %>%
+    mutate(lower_ci = prediction - se * 1.96,
+           upper_ci = prediction + se * 1.96)
+  
+  H1agreement_lineOfBestFit <-
+    ggplot(data, aes(
+      x = as.factor(SnowCover),
+      y = agreement,
+      fill = (SnowCover)
+    )) + geom_boxplot(size = .75) +
+    geom_line(
+      data = newdat_H1,
+      aes(SnowCover + 1, prediction),
+      color = 'red',
+      size = 1.5
+    ) + theme(
+      text = element_text(size = 14),
+      panel.background = element_blank(),
+      axis.line = element_line(colour = "grey"),
+      axis.text.x = element_text(
+        angle = 0,
+        hjust = 0.5,
+        vjust = 1
+      ),
+      legend.position = "none"
+    ) +
+    xlab("Image Labels") + ylab("Agreement") + scale_x_discrete(labels = c('~0%', "~25%", "~50%", "~75%", "~100%")) +
+    scale_fill_gradient(low = "gray28", high = "light grey") + labs(tag =
+                                                                      "B")
+
+  
+  return(H1agreement_lineOfBestFit)
+}
+
+H1_analysis(data)
+
+```
+
+### test for correlation
+```{r}
+cor.test(data$Latitude, data$treecanopycover)
+cor.test(data$treecanopycover, data$NDVImodis)# add NDVI
+cor.test(data$Latitude, data$NDVImodis)
+cor.test(data$SnowCover, data$Latitude)
+cor.test(data$SnowCover, data$NDVImodis) ## these two are correlated
+cor.test(data$SnowCover, data$treecanopycover)
+cor.test(data$binary.labels, data$treecanopycover)
+cor.test(data$binary.labels, data$treecanopycover, method = c("kendall"))
+cor.test(data$binary.labels, data$NDVImodis, method = c("kendall"))
+cor.test(data$binary.labels, data$Latitude, method = c("kendall"))
+
+```
+
+## linear model 
+
+```{r}
+
+dataA1_non_null <- na.omit(data)
+#test <- na.omit(data_Saturation)
+dataA1_non_null$LokalitetID <- factor(dataA1_non_null$LokalitetID)
+dataA1_non_null$binary.labels <- factor(dataA1_non_null$binary.labels)
+
+
+##get pvalues
+global_model <- lmerTest::lmer(abs(agreement) ~
+                          (1|LokalitetID) +
+                          scale(Latitude) + 
+                         scale(NDVImodis) + scale(treecanopycover) + binary.labels, data = dataA1_non_null) ### what family should I 
+
+summary(global_model)
+anova(global_model, test = "F")
+
+n <- length(fixef(global_model)) ## how long the contrast vector needs to be 
+
+L <- matrix(0, ncol =n, nrow=4)
+L[1,2] <- L[2,3] <- L[3,4] <- L[4,5] <- 1
+ncol(L)
+calcSatterth(global_model, L)
+lmerTest::contestMD(global_model, L) ##
+
+L <- rbind(c(0, 1, 0), c(0, 0, 1))
+
+```
+
+### cloud gap filled agreement
+
+```{r}
+CGFdata <- na.omit(CGFdata)
+
+CGFdata['SnowCover'] <- replace(CGFdata['SnowCover'], CGFdata['SnowCover'] == 4, 100)
+CGFdata['SnowCover'] <- replace(CGFdata['SnowCover'], CGFdata['SnowCover'] == 3, 75)
+CGFdata['SnowCover'] <- replace(CGFdata['SnowCover'], CGFdata['SnowCover'] == 2, 50)
+CGFdata['SnowCover'] <- replace(CGFdata['SnowCover'], CGFdata['SnowCover'] == 1, 25)
+CGFdata['SnowCover'] <- replace(CGFdata['SnowCover'], CGFdata['SnowCover'] == 0, 0)
+CGFdata['agreement'] <- 100 - abs((CGFdata[,'SnowCover']) - (CGFdata[,'CGF_NDSI']))
+
+
+cloud_gap_agreement <- function(data){
+  n <- length(data$agreement)
+  xbar <- mean(data$agreement)
+  s <- sd(data$agreement)
+  margin <- qt(0.95,df=n-1)*s/sqrt(n)
+  lowerinterval <- xbar - margin
+  upperinterval <- xbar + margin
+  print(n) 
+  print(xbar)
+  print(s)
+  print(lowerinterval) 
+  print(upperinterval)
+}
+
+cloud_gap_agreement(CGFdata)
+#hist(CGFdata$Cloud_Persistence, breaks = 30)
+
+b <- ggplot(CGFdata, aes(x=Cloud_Persistence)) + 
+  geom_histogram(color="black", fill="white") + theme(text = element_text(size=14), panel.background = element_blank(),
+        axis.line = element_line(colour = "grey"),
+        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1), legend.position = "none") + 
+  labs(x = "Cloud Persistence", y = "Count", tag = "B")
+
+a <- ggplot(MOD10A1F, aes(x=Cloud_Persistence)) + 
+  geom_histogram(color="black", fill="white") + theme(text = element_text(size=14), panel.background = element_blank(),
+        axis.line = element_line(colour = "grey"),
+        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1), legend.position = "none") + 
+  labs(x = "Cloud Persistence", y = "Count", tag = "A")
+  
+a
+b
+  
+  
+```
+
+
+## gam for cloud cover
+
+```{r}
+
+
+cloud_persistence_analysis <- function(data){
+  gam_CP <- mgcv::gam(agreement ~ s(Cloud_Persistence, k = 7), data=data)
+  lmCP <- lm(agreement ~ Cloud_Persistence + I(Cloud_Persistence^2), data=CGFdata)
+  summary(gam_CP); plot(gam_CP) #, pages = 1)
+  print(gam.check(gam_CP))
+  
+  # visualise predictions from best model
+  newdat_CP <- data.frame(Cloud_Persistence = seq(0,20, by = 0.5), agreement = 50)
+  # 
+  
+  # then predict from best model to new dataframe
+  predictionCGF_CP <- predict(gam_CP, newdat_CP, se.fit = T)
+  newdat_CP <- newdat_CP %>%
+    mutate(prediction = predictionCGF_CP[[1]],  se = predictionCGF_CP[[2]]) %>%
+    mutate(lower_ci = prediction - se*1.96,
+      upper_ci = prediction + se*1.96)
+  
+  modeledDataCGF_CP <- ggplot(newdat_CP, aes(Cloud_Persistence, prediction)) +
+    theme_minimal() +
+    geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), alpha = 0.5, colour = NA) +
+    geom_line(size = 1.5) +
+    labs(x = "model-predicted satellite CGF values") 
+  
+  CP_lineOfBestFit <- ggplot(data=data, aes(x=Cloud_Persistence,y= agreement)) +
+  theme(text = element_text(size=14), panel.background = element_blank(),
+        axis.line = element_line(colour = "grey"),
+        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1), legend.position = "none") +
+  geom_point(size=0.5) + 
+  geom_jitter(alpha = 0.3, size= 0.5)+
+  geom_line(data=newdat_CP, aes(Cloud_Persistence, prediction), color='blue',size=2)+
+  geom_ribbon(data =newdat_CP, aes(ymin = lower_ci, ymax = upper_ci), alpha = 0.5, fill='blue')+
+  labs(x = "Cloud Persistence", y = "Agreement", tag = "B")+ scale_x_continuous(expand = c(0, 0), limits = c(0,19)) + 
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) + geom_smooth(method = "loess")
+
+
+  CP_lineOfBestFit
+  
+  return(CP_lineOfBestFit)
+}
+
+cloud_persistence_analysis(CGFdata)
+
+
+```
+
+###ROC analysis
+
+SENSITIVITY: True positive rate
+SPECIFICITY: True negative rate --> 1- SPECIFICITY is the False Positive Rate
+
+```{r}
+# what is type "resp"
+# roc function takes the actual outcomes and the predicted values from the fit model
+
+ROC_analysis <- function(data) {
+  data$SnowCoverBinomial <-
+    replace(data$SnowCover, data$SnowCover >= 1 , 1)
+  
+  snow1 <- sapply(data["SnowCoverBinomial"], function(x)
+    x)
+  
+  score <- sapply(data["NDSImodis"], function(x)
+    x)
+  
+  score <-
+    abind::adrop(
+      score,
+      drop = 2,
+      named.vector = TRUE,
+      one.d.array = FALSE
+    )
+  
+  
+  logit_model <- glm(snow1 ~ score, family = "binomial")
+  
+  predictions <-
+    stats::predict(logit_model, data.frame(score = score), type = "resp")
+  
+  roc <- pROC::roc(snow1, predictions) ## this isn't running?? ***
+  
+  # Can extract the thresholds used and associated sensitivities and specificities
+  roc_data <- data.frame(
+    threshold_probability = roc$thresholds,
+    sens = roc$sensitivities,
+    spec = roc$specificities
+  )
+  
+  # Roc gives thresholds in terms of estimated probability according to the logistic model
+  # from which we can back out the score threshold
+  roc_data$threshold_log_odds <-
+    with(roc_data, log(threshold_probability / (1 - threshold_probability)))
+  roc_data$threshold_score <-
+    (roc_data$threshold_log_odds - logit_model$coefficients[1]) / logit_model$coefficients[2]
+  
+  y <- roc_data$sens
+  x <- 1 - roc_data$spec
+  #plot(x,y)
+  #to see a summary of sensitivity and specificity for all possible cut points: roc_data
+  
+  roc_data[10,] ## can do this up to 250 or so, depending on how many rows you want to see
+  print(roc_data[1:90,])
+  
+  ## find top left corner
+  # print('coordinates')
+  # print(coords(roc, "best", ret = "threshold")) ## why is this 0.52
+  # x_max <-  roc$thresholds[which.max(roc$sensitivities + roc$specificities)]
+  # print('x_max')
+  # print(x_max)
+  # y_max <- roc$thresholds[which.max(roc$sensitivities + roc$specificities)]
+  # print('y_max')
+  # print(y_max)
+  # print('roc_data')
+  # roc_data
+  # 
+  # x_max1 <- roc$specificities[which(roc$thresholds == 40.5)]
+  # print('x_max1')
+  # print(x_max1)
+
+    #rocPanel <- grid.arrange(rocPlot, p, nrow = 1)
+  
+  # use this one
+  rocdataWide <- roc_data[, c(2, 3, 5)]
+  print('rocdataWide')
+  print(rocdataWide)
+  rocdataWide$TrueNeg <- 1 - roc_data$spec
+  rocdataWide$Youden <- roc_data$sens + roc_data$spec - 1
+  YoudenIndex <- (max(rocdataWide$Youden))
+  score_value <-
+    rocdataWide[rocdataWide$Youden == YoudenIndex, "threshold_score"]
+  print(score_value)
+  x_max <- rocdataWide$spec[which(rocdataWide$threshold_score == score_value)]
+  print('x_max')
+  print(x_max)
+  print('1-x_max')
+  print(1-x_max)
+  y_max <- rocdataWide$sens[which(rocdataWide$threshold_score == score_value)]
+  print('y_max')
+  print(y_max)
+  
+  
+  ## 0.5260591 ## match to the right (below) in the roc table
+  ## 0.52605908 0.9272606677 0.8607509        0.104330845       43.499379
+  ## threshold is 43.499379
+  
+  ## visualize ROC plot and threshold Plot
+  
+  rocPlot <-
+    ggplot(roc_data, aes(x = 1 - spec, y = sens), ) + geom_line(size = 1.5, color = "grey") +
+    xlab("False Positive Rate") +
+    ylab("True Positive Rate") +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      text = element_text(size = 18),
+      axis.line = element_line(colour = "black"),
+    ) +
+    scale_y_continuous(expand = c(0, 0), limits = c(0, 1.00)) +
+    scale_x_continuous(expand = c(0, 0), limits = c(0, 1.05)) +
+    geom_point(aes(x = 1 - x_max, y = y_max),
+               colour = "blue",
+               size = 4)
+  
+  print(rocPlot)
+  
+  rocdataWide <- rocdataWide[, c(1, 3, 4, 5)]
+  rocdataLong <- reshape::melt(
+    data = rocdataWide,
+    id.vars = 'threshold_score',
+    variable = "ROCOutput",
+    value = "Value"
+  )
+  
+  thresholdPlot <-
+    ggplot(rocdataLong,
+           aes(x = threshold_score , y = value, color = ROCOutput)) +
+    geom_line(size = 1.5) +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      text = element_text(size = 18),
+      axis.line = element_line(colour = "black"),
+      legend.position = c(0.8, 0.8),
+      legend.title.align = 0.5
+    ) +
+    xlab('MOD10A1 NDSI Snow Cover') + ylab('Rate') +
+    scale_y_continuous(
+      expand = c(0, 0),
+      limits = c(0, 1.01),
+      sec.axis = sec_axis(trans = ~ . * 1,  name = "Youden's Index")
+    ) +
+    scale_x_continuous(expand = c(0, 0), limits = c(0, 100)) +
+    geom_vline(
+      xintercept = score_value,
+      linetype = "longdash",
+      alpha = 0.9,
+      colour = "blue"
+    ) +
+    geom_point(aes(x = score_value, y = (y_max - (1 - x_max))), colour =  #0.8878449794	0.8894723	0.62875996
+                 "blue", size = 4) +
+    scale_color_manual(
+      name = "ROC Output",
+      values = c("red", "orange", "green"),
+      labels = c("True Positive Rate", "True Negative Rate", "Youden's Index"),
+    )
+  
+  print(thresholdPlot)
+  rocPanel <- grid.arrange(rocPlot, thresholdPlot, nrow = 1)
+  return(rocPanel)
+}
+
+
+ROC_analysis(data)
+
+```
+
+
+## end
+
+
+
