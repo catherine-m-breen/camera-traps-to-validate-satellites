@@ -2,7 +2,9 @@
 title: "cameraSatellite_analysis"
 author: "Catherine Breen"
 date: "1/13/2022"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 This notebook is to investigate the following research questions:
@@ -71,7 +73,7 @@ data <- merge(data, saturation, by.x = 'File', by.y = 'filename', all.x = TRUE)
 print(cor(data$NDSImodis, data$SnowCover)) ##0.81
 
 data$dateFormatted <- as.POSIXct(as.Date(data$Date,format='%m/%d/%y'))
-rm(data_csv,  NDVImax, saturation, lat)
+rm(data_csv,  saturation)
 
 print(length(unique(data$LokalitetID))) ##665 cameras
 
@@ -96,22 +98,22 @@ hist(data_cgf_csv$Date, breaks = 376)
 length(unique(data$Date))
 
 
-
-##########################
-tanvi_images <- read.csv('/Users/catherinebreen/Documents/RemoteSensingPaper/datasets/tanvi_labeled_images_cgf.csv')
-tanvi_images <- tanvi_images[tanvi_images$PoorQualilty == FALSE,]
-tanvi_images <- tanvi_images[,c("File", "Date", "Time", "SnowCover")]
-tanvi_images$LokalitetID <- sapply(strsplit(tanvi_images$File,"_"), getElement, 1)
-tanvi_images$Date <- dmy(tanvi_images$Date)
-
-
-
-combined <- rbind(tanvi_images, data_cgf_csv)
-combined <- distinct(combined, File, .keep_all = TRUE)
-combined <- distinct(combined, LokalitetID, Date, .keep_all = TRUE)
-
-rm(tanvi_images)
+########################## additional images
+# tanvi_images <- read.csv('/Users/catherinebreen/Documents/RemoteSensingPaper/datasets/tanvi_labeled_images_cgf.csv')
+# tanvi_images <- tanvi_images[tanvi_images$PoorQualilty == FALSE,]
+# tanvi_images <- tanvi_images[,c("File", "Date", "Time", "SnowCover")]
+# tanvi_images$LokalitetID <- sapply(strsplit(tanvi_images$File,"_"), getElement, 1)
+# tanvi_images$Date <- dmy(tanvi_images$Date)
+# 
+# 
+# combined <- rbind(tanvi_images, data_cgf_csv)
+# combined <- distinct(combined, File, .keep_all = TRUE)
+# combined <- distinct(combined, LokalitetID, Date, .keep_all = TRUE)
+# 
+# rm(tanvi_images)
 ###############################
+
+combined <- data_cgf_csv
 
 print(length(unique(combined$LokalitetID))) ##775
 
@@ -124,12 +126,15 @@ MOD10A1F_CGF <- read.csv('~/Documents/RemoteSensingPaper/datasets/MOD101AF_CGFmo
 MOD10A1F_CGF$dateFormatted <- as.POSIXct(sapply(strsplit(MOD10A1F_CGF$imageId,"T"), getElement, 1))
 MOD10A1F <- merge(MOD10A1F_CP, MOD10A1F_CGF, by.x = c("LokalitetID", "dateFormatted"), by.y = c("LokalitetID", "dateFormatted"))
 MOD10A1F <- MOD10A1F[,-c(3:4,6:8,10)]
-colnames(MOD10A1F) <- c('LokalitetID', 'dateFormatted', 'Cloud_Persistence', 'CGF_NDSI')    
+colnames(MOD10A1F) <- c('LokalitetID', 'dateFormatted', 'Cloud_Persistence', 'CGF_NDSI')
 MOD10A1F <- dplyr::filter(MOD10A1F, (dateFormatted >= as.POSIXct('2017-10-01') & dateFormatted <= as.POSIXct('2018-04-01')) |
                             dateFormatted >= as.POSIXct('2018-10-01') & dateFormatted <= as.POSIXct('2019-04-01') |
                             dateFormatted >= as.POSIXct('2019-10-01') & dateFormatted <= as.POSIXct('2020-04-01')) ##
 MOD10A1F <- na.omit(MOD10A1F) ## won't do anything
 rm(MOD10A1F_CGF, MOD10A1F_CP)
+
+
+#CGFdata <- merge(data_cgf_csv, MOD10A1F, by.x= c("Date", "LokalitetID"), by.y = c("dateFormatted", "LokalitetID"))
 
 CGFdata <- merge(combined, MOD10A1F, by.x= c("Date", "LokalitetID"), by.y = c("dateFormatted", "LokalitetID"))
 print(nrow(CGFdata)) #10374
@@ -144,7 +149,10 @@ print(nrow(CGFdata)) ## 10171
 rm(data_cgf_csv, data_csv, combined, saturation)
 
 hist(MOD10A1F$Cloud_Persistence, n = 50)
-hist(CGFdata$Cloud_Persistence, n = 30)
+hist(CGFdata$Cloud_Persistence, n = 20)
+#test <- CGFdata[CGFdata$Cloud_Persistence > 21,]
+#hist(test$Cloud_Persistence, n=14)
+
 
 ```
 
@@ -229,7 +237,7 @@ A1F_R2 <-  0.6845 ### this seems too low
 # visualise predictions from best model
 # first create new data frames with explanatory values we wish to predict to
 
-boxplot_comparison <- function(data, linear_model, NDSI) {
+boxplot_comparison <- function(data, linear_model, NDSImodis) {
   newdat <-
     data.frame(SnowCover = seq(min(data$SnowCover), max(data$SnowCover), by = 0.1),
                NDSI = 50)
@@ -240,7 +248,6 @@ boxplot_comparison <- function(data, linear_model, NDSI) {
     mutate(prediction = prediction2[[1]],  se = prediction2[[2]]) %>%
     mutate(lower_ci = prediction - se * 1.96,
            upper_ci = prediction + se * 1.96)
-  
   ### line of best fit on boxplot
   m <-
     ggplot(data, aes(
@@ -254,7 +261,7 @@ boxplot_comparison <- function(data, linear_model, NDSI) {
       color = 'red',
       size = 1.5
     ) + theme(
-      text = element_text(size = 14),
+      text = element_text(size = 22),
       panel.background = element_blank(),
       axis.line = element_line(colour = "grey"),
       axis.text.x = element_text(
@@ -262,15 +269,15 @@ boxplot_comparison <- function(data, linear_model, NDSI) {
         hjust = 0.5,
         vjust = 1
       ),
-      legend.position = "none"
-    ) + abline(a=0,b=1) + 
+      legend.position = "none", axis.text = element_text(size = 20)
+    ) + 
     xlab("Image Labels") + ylab("NDSI Snow Cover") + scale_x_discrete(labels = c('~0%', "~25%", "~50%", "~75%", "~100%")) +
     scale_fill_gradient(low = "gray28", high = "light grey") + labs(tag =
                                                                       "A")
   return(m)
 }
 
-#boxplot_comparison(data, A1model, NDSImodis)
+boxplot_A1camera <- boxplot_comparison(data, A1model, data$NDSImodis)
 
 
 ```
@@ -382,7 +389,7 @@ H1_analysis <- function(data) {
       color = 'red',
       size = 1.5
     ) + theme(
-      text = element_text(size = 14),
+      text = element_text(size = 22),
       panel.background = element_blank(),
       axis.line = element_line(colour = "grey"),
       axis.text.x = element_text(
@@ -390,7 +397,7 @@ H1_analysis <- function(data) {
         hjust = 0.5,
         vjust = 1
       ),
-      legend.position = "none"
+      legend.position = "none",  axis.text = element_text(size = 20)
     ) +
     xlab("Image Labels") + ylab("Agreement") + scale_x_discrete(labels = c('~0%', "~25%", "~50%", "~75%", "~100%")) +
     scale_fill_gradient(low = "gray28", high = "light grey") + labs(tag =
@@ -400,7 +407,9 @@ H1_analysis <- function(data) {
   return(H1agreement_lineOfBestFit)
 }
 
-H1_analysis(data)
+boxplot_agreementcamera <- H1_analysis(data)
+
+grid.arrange(boxplot_A1camera, boxplot_agreementcamera, ncol=2)
 
 ```
 
@@ -438,21 +447,29 @@ global_model <- lmerTest::lmer(abs(agreement) ~
 summary(global_model)
 anova(global_model, test = "F")
 
-n <- length(fixef(global_model)) ## how long the contrast vector needs to be 
-
-L <- matrix(0, ncol =n, nrow=4)
-L[1,2] <- L[2,3] <- L[3,4] <- L[4,5] <- 1
-ncol(L)
-calcSatterth(global_model, L)
-lmerTest::contestMD(global_model, L) ##
-
-L <- rbind(c(0, 1, 0), c(0, 0, 1))
+# n <- length(fixef(global_model)) ## how long the contrast vector needs to be
+# 
+# L <- matrix(0, ncol =n, nrow=4)
+# L[1,2] <- L[2,3] <- L[3,4] <- L[4,5] <- 1
+# ncol(L)
+# calcSatterth(global_model, L)
+# lmerTest::contestMD(global_model, L) ##
+# 
+# L <- rbind(c(0, 1, 0), c(0, 0, 1))
 
 ```
+## addition from reviewer
+### evaluating model for model fit
+## using AIC-based or VIF
+
+```{r}
+```
+
 
 ### cloud gap filled agreement
 
 ```{r}
+
 CGFdata <- na.omit(CGFdata)
 
 CGFdata['SnowCover'] <- replace(CGFdata['SnowCover'], CGFdata['SnowCover'] == 4, 100)
@@ -480,22 +497,22 @@ cloud_gap_agreement <- function(data){
 cloud_gap_agreement(CGFdata)
 #hist(CGFdata$Cloud_Persistence, breaks = 30)
 
-b <- ggplot(CGFdata, aes(x=Cloud_Persistence)) + 
+hist_dataCP <- ggplot(CGFdata, aes(x=Cloud_Persistence)) + 
   geom_histogram(color="black", fill="white") + theme(text = element_text(size=14), panel.background = element_blank(),
         axis.line = element_line(colour = "grey"),
         axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1), legend.position = "none") + 
   labs(x = "Cloud Persistence", y = "Count", tag = "B")
 
-a <- ggplot(MOD10A1F, aes(x=Cloud_Persistence)) + 
+hist_A1F_CP <- ggplot(MOD10A1F, aes(x=Cloud_Persistence)) + 
   geom_histogram(color="black", fill="white") + theme(text = element_text(size=14), panel.background = element_blank(),
         axis.line = element_line(colour = "grey"),
         axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1), legend.position = "none") + 
   labs(x = "Cloud Persistence", y = "Count", tag = "A")
   
-a
-b
+hist_dataCP
+hist_A1F_CP
   
-  
+
 ```
 
 
@@ -506,12 +523,11 @@ b
 
 cloud_persistence_analysis <- function(data){
   gam_CP <- mgcv::gam(agreement ~ s(Cloud_Persistence, k = 7), data=data)
-  lmCP <- lm(agreement ~ Cloud_Persistence + I(Cloud_Persistence^2), data=CGFdata)
+  #lmCP <- lm(agreement ~ Cloud_Persistence + I(Cloud_Persistence^2), data=data)
   summary(gam_CP); plot(gam_CP) #, pages = 1)
-  print(gam.check(gam_CP))
   
   # visualise predictions from best model
-  newdat_CP <- data.frame(Cloud_Persistence = seq(0,20, by = 0.5), agreement = 50)
+  newdat_CP <- data.frame(Cloud_Persistence = seq(0,14, by = 0.5), agreement = 50)
   # 
   
   # then predict from best model to new dataframe
@@ -520,7 +536,7 @@ cloud_persistence_analysis <- function(data){
     mutate(prediction = predictionCGF_CP[[1]],  se = predictionCGF_CP[[2]]) %>%
     mutate(lower_ci = prediction - se*1.96,
       upper_ci = prediction + se*1.96)
-  
+
   modeledDataCGF_CP <- ggplot(newdat_CP, aes(Cloud_Persistence, prediction)) +
     theme_minimal() +
     geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), alpha = 0.5, colour = NA) +
@@ -535,19 +551,19 @@ cloud_persistence_analysis <- function(data){
   geom_jitter(alpha = 0.3, size= 0.5)+
   geom_line(data=newdat_CP, aes(Cloud_Persistence, prediction), color='blue',size=2)+
   geom_ribbon(data =newdat_CP, aes(ymin = lower_ci, ymax = upper_ci), alpha = 0.5, fill='blue')+
-  labs(x = "Cloud Persistence", y = "Agreement", tag = "B")+ scale_x_continuous(expand = c(0, 0), limits = c(0,19)) + 
+  labs(x = "Cloud persistence (days)", y = "Agreement (%)")+ scale_x_continuous(expand = c(0, 0), limits = c(0,14)) + 
   scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) + geom_smooth(method = "loess")
 
-
-  CP_lineOfBestFit
-  
   return(CP_lineOfBestFit)
 }
+
 
 cloud_persistence_analysis(CGFdata)
 
 
 ```
+
+
 
 ###ROC analysis
 
@@ -687,8 +703,10 @@ ROC_analysis <- function(data) {
       panel.background = element_blank(),
       text = element_text(size = 18),
       axis.line = element_line(colour = "black"),
-      legend.position = c(0.8, 0.8),
-      legend.title.align = 0.5
+      legend.position = c(0.78, 0.80),
+      legend.title.align = 0.5,
+      legend.title = element_text(size=12),
+      legend.text = element_text(size=12)
     ) +
     xlab('MOD10A1 NDSI Snow Cover') + ylab('Rate') +
     scale_y_continuous(
@@ -717,12 +735,152 @@ ROC_analysis <- function(data) {
 }
 
 
-ROC_analysis(data)
+ROC_analysis(data) ## results show that 
+
+```
+
+As requested by the reviewer, we will do the analysis for both open and canopy cover. 
+This could be helpful depending on where you are doing your analysis, such as potentially above tree-line, or in agricultural areas.
+
+So far all data is: 
+[1] "rocdataWide"
+[1] 40.49696
+[1] "x_max"
+[1] 0.8817326
+[1] "1-x_max"
+[1] 0.1182674
+[1] "y_max"
+[1] 0.8833522
+
+closed_cc: 
+[1] "rocdataWide"
+[1] 40.49696
+[1] "x_max"
+[1] 0.8817326
+[1] "1-x_max"
+[1] 0.1182674
+[1] "y_max"
+[1] 0.8833522
+
+open_cc: 
+[1] "rocdataWide"
+[1] 41.49575
+[1] "x_max"
+[1] 0.9115827
+[1] "1-x_max"
+[1] 0.08841733
+[1] "y_max"
+[1] 0.8947368
+
+```{r}
+data_closed_cc <- data[data$treecanopycover > 20,]
+data_open_cc <- data[data$treecanopycover < 20,]
+
+ROC_analysis(data_closed_cc)
+ROC_analysis(data_open_cc) 
 
 ```
 
 
+NDVImax for supplemental 
+
+```{r}
+##NDVImax
+## filter on year
+NDVImaxFunction <- function(data){
+  data1 <- dplyr::filter(data, (dateFormatted >= as.POSIXct('2017-10-01') & dateFormatted <= as.POSIXct('2018-04-01')))
+  data1$NDVImax <- rep(mean(data1$NDVImodis), length(data1$NDVImodis))
+  data2 <- dplyr::filter(data, (dateFormatted >= as.POSIXct('2018-10-01') & dateFormatted <= as.POSIXct('2019-04-01')))
+  data2$NDVImax <- rep(mean(data2$NDVImodis), length(data2$NDVImodis))
+  data3 <- dplyr::filter(data, (dateFormatted >= as.POSIXct('2019-10-01') & dateFormatted <= as.POSIXct('2020-04-01')))
+  data3$NDVImax <- rep(mean(data3$NDVImodis), length(data3$NDVImodis))
+  data4 <- rbind(data1, data2, data3)
+  return(data4)
+  }
+
+NDVImaxdf <- NDVImaxFunction(dataA1_non_null)
+
+global_model_wNDVImax <- lmerTest::lmer(abs(agreement) ~
+                          (1|LokalitetID) +
+                          scale(Latitude) + 
+                         scale(NDVImax) + scale(treecanopycover) + binary.labels, data = NDVImaxdf) ### what family 
+global_model_wNDVImax
+summary(global_model_wNDVImax)
+```
+
 ## end
 
+add kommunes to decrease spatial autocorrelation
 
+```{r}
+kommunes <- read.csv('/Users/catherinebreen/Documents/RemoteSensingPaper/datasets/ScandCam_AllCameras_05072020_GEE.csv')
+kommunes[kommunes$Kommune == 501,]
+kommunes_clean <- kommunes[,c("LokalitetID", "Kommune")]
+kommunes_clean[kommunes_clean$Kommune == 501,]
+head(kommunes)
+kommunes_merged <- merge(data, kommunes_clean, by = 'LokalitetID' )
+kommunes_merged[kommunes_merged$Kommune == 1832,]
+
+unique(kommunes_merged$Kommune)
+hist(kommunes_merged$Kommune, breaks = 100)
+
+dataA1_non_null_coarse_kommune <- na.omit(kommunes_merged)
+#test <- na.omit(data_Saturation)
+dataA1_non_null_coarse_kommune$LokalitetID <- factor(dataA1_non_null_coarse_kommune$LokalitetID)
+dataA1_non_null_coarse_kommune$binary.labels <- factor(dataA1_non_null_coarse_kommune$binary.labels)
+
+global_model_kommune <- lmerTest::lmer(abs(agreement) ~
+                          (1|Kommune) +
+                          scale(Latitude) + 
+                         scale(NDVImodis) + scale(treecanopycover) + binary.labels, data = dataA1_non_null_coarse_kommune) ### what family should I 
+
+summary(global_model_kommune)
+
+```
+
+admin names (county and municpality)
+```{r}
+counties <- read.csv('/Users/catherinebreen/Documents/Chapter 3/data/county_name.csv')
+counties_merged <- merge(data, counties, by = 'LokalitetID' )
+
+unique(counties_merged$ADM0_CODE)  #country
+unique(counties_merged$ADM1_CODE)  #county
+unique(counties_merged$ADM2_CODE)  #district
+```
+
+Run model for spatial correlation by coarsening to kommune, then district, then county level 
+
+```{r}
+
+dataA1_non_null_coarse <- na.omit(counties_merged)
+#test <- na.omit(data_Saturation)
+dataA1_non_null_coarse$LokalitetID <- factor(dataA1_non_null_coarse$LokalitetID)
+dataA1_non_null_coarse$binary.labels <- factor(dataA1_non_null_coarse$binary.labels)
+
+
+##get pvalues
+global_model_district <- lmerTest::lmer(abs(agreement) ~
+                          (1|ADM2_CODE) +
+                          scale(Latitude) + 
+                         scale(NDVImodis) + scale(treecanopycover) + binary.labels, data = dataA1_non_null_coarse) ### what family should I 
+
+summary(global_model_district)
+anova(global_model_district, test = "F")
+
+global_model_county <- lmerTest::lmer(abs(agreement) ~
+                          (1|ADM1_CODE) +
+                          scale(Latitude) + 
+                         scale(NDVImodis) + scale(treecanopycover) + binary.labels, data = dataA1_non_null_coarse) ### what family should I 
+
+summary(global_model_county)
+
+global_model_country <- lmerTest::lmer(abs(agreement) ~
+                          (1|ADM0_CODE) +
+                          scale(Latitude) + 
+                         scale(NDVImodis) + scale(treecanopycover) + binary.labels, data = dataA1_non_null_coarse) ### what family should I 
+
+summary(global_model_country)
+
+
+```
 
