@@ -75,9 +75,33 @@ print(cor(data$NDSImodis, data$SnowCover)) ##0.81
 data$dateFormatted <- as.POSIXct(as.Date(data$Date,format='%m/%d/%y'))
 rm(data_csv,  saturation)
 
+####################### UPDATE #####################
+# Narrow study period to November to April 
+# After inspecting the spatial autocorrelation, we found that fitting for spatial autocorrelation, did not improve residuals
+# Instead it seems like the October values are throwing it off because it is inflating our 0 values?? I am not really sure how to explain it. 
+
+# data2018 <- data %>% filter(dateFormatted < ('2018-03-30')) %>% filter(dateFormatted > ('2017-11-01'))
+# data2019 <- data %>% filter(dateFormatted < ('2019-03-30')) %>% filter(dateFormatted > ('2018-11-01'))
+# data2020 <- data %>% filter(dateFormatted < ('2020-03-30')) %>% filter(dateFormatted > ('2019-11-01'))
+# data <- rbind(data2018,data2019,data2020)
+
+####################################################
+
 print(length(unique(data$LokalitetID))) ##665 cameras
 
 ```
+
+##coordinates table
+
+```{r}
+coordinates <- read.csv('/Users/catherinebreen/Documents/Chapter 3/data/ScandCam_AllCameras_05072020_GEE.csv')
+coordinates <- coordinates[,c('LokalitetID', 'Latitude', 'Longitude')]
+
+coordinates[coordinates$LokalitetID == 671,]
+coordinates[coordinates$LokalitetID == 894,]
+
+```
+
 
 # MOD10A1F + camera data 
 #### cleaned in python
@@ -128,8 +152,8 @@ MOD10A1F <- merge(MOD10A1F_CP, MOD10A1F_CGF, by.x = c("LokalitetID", "dateFormat
 MOD10A1F <- MOD10A1F[,-c(3:4,6:8,10)]
 colnames(MOD10A1F) <- c('LokalitetID', 'dateFormatted', 'Cloud_Persistence', 'CGF_NDSI')
 MOD10A1F <- dplyr::filter(MOD10A1F, (dateFormatted >= as.POSIXct('2017-10-01') & dateFormatted <= as.POSIXct('2018-04-01')) |
-                            dateFormatted >= as.POSIXct('2018-10-01') & dateFormatted <= as.POSIXct('2019-04-01') |
-                            dateFormatted >= as.POSIXct('2019-10-01') & dateFormatted <= as.POSIXct('2020-04-01')) ##
+                            dateFormatted >= as.POSIXct('2018-11-01') & dateFormatted <= as.POSIXct('2019-04-01') |
+                            dateFormatted >= as.POSIXct('2019-11-01') & dateFormatted <= as.POSIXct('2020-04-01')) ##
 MOD10A1F <- na.omit(MOD10A1F) ## won't do anything
 rm(MOD10A1F_CGF, MOD10A1F_CP)
 
@@ -213,6 +237,77 @@ hist_function(data)
 #etc
 
 ```
+## REVISION ADDITION
+before general correlation, check for spatial autocorrelation in data
+
+```{r}
+library(spdep)
+library(dplyr)
+# https://datascienceplus.com/spatial-regression-in-r-part-1-spamm-vs-glmmtmb/
+
+
+dat_katie <- data
+#dat_katie <- dataA1_non_null 
+stations_katie <- data.frame(unique(dat_katie$LokalitetID))
+names(stations_katie)[names(stations_katie)=="unique.dat_katie.LokalitetID."] <- "LokalitetID"
+  
+gis_katie <- data.frame(unique(dat_katie[c("LokalitetID", "Latitude", "Longitude")]))
+gis_katie <- as.matrix(gis_katie[,2:3])
+  
+nb_katie <- dnearneigh(gis_katie,0,0.2) # 0.01 dec. deg. = 1.11 km
+  
+dat_katie <- dat_katie %>%
+    group_by(LokalitetID) %>%
+    mutate(avg.NDSI = mean(NDSImodis))
+moran <- dat_katie %>%
+  dplyr::select(LokalitetID, avg.NDSI)
+moran <- unique(moran)
+moran <- left_join(stations_katie, moran)
+moran <- moran %>%
+  arrange(LokalitetID)
+NDSI_cor_moran_pvalue <- moran.test(moran$avg.NDSI,
+             nb2listw(nb_katie, style="W",
+                      zero.policy = TRUE),
+             zero.policy = TRUE,
+             na.action = na.omit) 
+
+#NDSI_cor_moran_pvalue <- 0.471 # not significant
+
+##########################################################
+##########################################################
+
+CGFdata1 <- left_join(CGFdata, coordinates)
+#CGFdata1 <- merge(CGFdata, coordinates, by ='LokalitetID')
+dat_katie <- CGFdata1
+#dat_katie <- dataA1_non_null 
+stations_katie <- data.frame(unique(dat_katie$LokalitetID))
+names(stations_katie)[names(stations_katie)=="unique.dat_katie.LokalitetID."] <- "LokalitetID"
+  
+gis_katie <- data.frame(unique(dat_katie[c("LokalitetID", "Latitude", "Longitude")]))
+gis_katie <- as.matrix(gis_katie[,2:3])
+  
+nb_katie <- dnearneigh(gis_katie,0,0.2) # 0.01 dec. deg. = 1.11 km
+  
+dat_katie <- dat_katie %>%
+    group_by(LokalitetID) %>%
+    mutate(avg.NDSI = mean(CGF_NDSI))
+moran <- dat_katie %>%
+  dplyr::select(LokalitetID, avg.NDSI)
+moran <- unique(moran)
+moran <- left_join(stations_katie, moran)
+moran <- moran %>%
+  arrange(LokalitetID)
+moran.test(moran$avg.NDSI,
+             nb2listw(nb_katie, style="W",
+                      zero.policy = TRUE),
+             zero.policy = TRUE,
+             na.action = na.omit) 
+
+NDSI_cor_moran_pvalue <- 0.04884 # WILL NEED TO ACCOUNT FOR SPATIAL AUTOCORRELATION
+
+```
+
+
 ## overall agreement and distribution
 
 ```{r}
@@ -228,6 +323,15 @@ summary(A1Fmodel)
 A1F_R2 <-  0.6845 ### this seems too low
 
 ```
+
+## because there is spatial autocorrelation, we should account for it. 
+What happens if you account for it, but it isn't there? 
+Why would it be in the CGfdataset, but not the NDSI? likely because cloud cover has spatial patterns? 
+
+```{r}
+
+```
+
 
 
 ### distribution and line of best fit
@@ -428,6 +532,7 @@ cor.test(data$binary.labels, data$Latitude, method = c("kendall"))
 
 ```
 
+
 ## linear model 
 
 ```{r}
@@ -458,11 +563,19 @@ anova(global_model, test = "F")
 # L <- rbind(c(0, 1, 0), c(0, 0, 1))
 
 ```
-## addition from reviewer
-### evaluating model for model fit
-## using AIC-based or VIF
+## reviewer addition: using the variance inflation factor test
+
+Interpretation:
+Variance inflation factors range from 1 upwards. The numerical value for VIF tells you (in decimal form) what percentage the variance (i.e. the standard error squared) is inflated for each coefficient. For example, a VIF of 1.9 tells you that the variance of a particular coefficient is 90% bigger than what you would expect if there was no multicollinearity — if there was no correlation with other predictors.
+A rule of thumb for interpreting the variance inflation factor:
+1 = not correlated.
+Between 1 and 5 = moderately correlated.
+Greater than 5 = highly correlated.
+
 
 ```{r}
+library(car)
+vif(global_model)
 ```
 
 
@@ -575,6 +688,7 @@ SPECIFICITY: True negative rate --> 1- SPECIFICITY is the False Positive Rate
 # roc function takes the actual outcomes and the predicted values from the fit model
 
 ROC_analysis <- function(data) {
+  data <- data
   data$SnowCoverBinomial <-
     replace(data$SnowCover, data$SnowCover >= 1 , 1)
   
@@ -736,6 +850,7 @@ ROC_analysis <- function(data) {
 
 
 ROC_analysis(data) ## results show that 
+#ROC_analysis(dat)
 
 ```
 
@@ -883,4 +998,100 @@ summary(global_model_country)
 
 
 ```
+
+After running Moran's test in (6.sp_ac.R), we determined that we do need to take into account spatial autocorrelation. 
+We will use the glmmTmb package in order to fit model while taking into account that cameras closer to each other will be more similiar than cameras further away. 
+
+https://cran.r-project.org/web/packages/glmmTMB/glmmTMB.pdf 
+
+comparing original model to model with spatial information, as done here: https://stats.stackexchange.com/questions/501396/glmmtmb-random-intercepts-vs-spatial-random-field 
+
+so far.. .
+Warning: NA/NaN function evaluation
+Warning: NA/NaN function evaluation
+Warning: NA/NaN function evaluation
+Warning: Model convergence problem; non-positive-definite Hessian matrix. See vignette('troubleshooting')Warning: Model convergence problem; false convergence (8). See vignette('troubleshooting')
+
+```{r}
+
+library(spdep)
+library(dplyr)
+# https://datascienceplus.com/spatial-regression-in-r-part-1-spamm-vs-glmmtmb/
+dat_katie <- data
+#dat_katie <- dataA1_non_null 
+stations_katie <- data.frame(unique(dat_katie$LokalitetID))
+names(stations_katie)[names(stations_katie)=="unique.dat_katie.LokalitetID."] <- "LokalitetID"
+
+gis_katie <- data.frame(unique(dat_katie[c("LokalitetID", "Latitude", "Longitude")]))
+gis_katie <- as.matrix(gis_katie[,2:3])
+
+nb_katie <- dnearneigh(gis_katie,0,0.2) # 0.01 dec. deg. = 1.11 km
+
+dat_katie <- dat_katie %>%
+  group_by(LokalitetID) %>%
+  mutate(avg.agree = mean(agreement))
+moran <- dat_katie %>%
+  dplyr::select(LokalitetID, avg.agree)
+moran <- unique(moran)
+moran <- left_join(stations_katie, moran)
+moran <- moran %>%
+  arrange(LokalitetID)
+moran.test(moran$avg.agree,
+           nb2listw(nb_katie, style="W",
+                    zero.policy = TRUE),
+           zero.policy = TRUE,
+           na.action = na.omit)
+
+
+```
+
+
+```{r}
+library(DHARMa)
+library(glmmTMB)
+# first we need to create a numeric factor recording the coordinates of the sampled locations
+
+dat <- data
+dat$camCoords <- numFactor(scale(dat$Longitude), scale(dat$Latitude))
+# then create a dummy group factor to be used as a random term
+dat$ID <- factor(rep(1, nrow(dat)))
+
+#Model using only site ID
+mod1 <- glmmTMB(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + 
+                  binary.labels + (1| LokalitetID),data=dat,family=gaussian())
+summary(mod1)
+sims1 <- simulateResiduals(mod1)
+plot(sims1)
+# 
+# X <- model.matrix(~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover),
+#                   data=dat)
+# ncol(X)  ## 13
+# Matrix::rankMatrix(X) ## 11
+
+cor.test(dat$NDVImodis, dat$treecanopycover)
+#Model using site location
+## same as with lme4, but now we are using glmmTMB
+# do we have to drop the fixed effect of cameras? It looks like you can, because you now account for grouping 
+# by coordinates, not by camera. 
+## mat stands for matern, which is a covariance function
+# can read about all the covariance structures here: https://cran.r-project.org/web/packages/glmmTMB/vignettes/covstruct.html 
+mod2 <- glmmTMB(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + binary.labels +
+                   mat(camCoords + 0 | ID), data = dat, family = gaussian())
+summary(mod2)
+sims2 <- simulateResiduals(mod2)
+plot(sims2)
+
+# mod3 <- glmmTMB(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + binary.labels +
+#                   (1|LokalitetID) + mat(camCoords + 0 | ID), data = dat, family = gaussian())
+# ## Warning: Model convergence problem; non-positive-definite Hessian matrix. See vignette('troubleshooting')
+# summary(mod3)
+# sims3 <- simulateResiduals(mod3)
+# plot(sims3)
+
+
+```
+
+
+
+
 
