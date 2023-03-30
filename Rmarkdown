@@ -3,8 +3,8 @@ title: "cameraSatellite_analysis"
 author: "Catherine Breen"
 date: "1/13/2022"
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 ---
 
 This notebook is to investigate the following research questions:
@@ -34,15 +34,20 @@ library(grid)
 library(gridExtra)
 library(abind)
 library(ggplot2)
-library(pROC)
-library(lme4)
-library(MuMIn)
 library(mgcv)
 library(caret)
 library(tidyr)
 library(dplyr)
-library(lmerTest)
 library(lubridate)
+
+### for models
+library(DHARMa)
+library(glmmTMB)
+
+# for ROC analysis
+library(pROC)
+
+
 ```
 
 ## Load data and include cameraID 
@@ -79,7 +84,7 @@ rm(data_csv,  saturation)
 # Narrow study period to November to April 
 # After inspecting the spatial autocorrelation, we found that fitting for spatial autocorrelation, did not improve residuals
 # Instead it seems like the October values are throwing it off because it is inflating our 0 values?? I am not really sure how to explain it. 
-
+# 
 # data2018 <- data %>% filter(dateFormatted < ('2018-03-30')) %>% filter(dateFormatted > ('2017-11-01'))
 # data2019 <- data %>% filter(dateFormatted < ('2019-03-30')) %>% filter(dateFormatted > ('2018-11-01'))
 # data2020 <- data %>% filter(dateFormatted < ('2020-03-30')) %>% filter(dateFormatted > ('2019-11-01'))
@@ -254,7 +259,7 @@ names(stations_katie)[names(stations_katie)=="unique.dat_katie.LokalitetID."] <-
 gis_katie <- data.frame(unique(dat_katie[c("LokalitetID", "Latitude", "Longitude")]))
 gis_katie <- as.matrix(gis_katie[,2:3])
   
-nb_katie <- dnearneigh(gis_katie,0,0.2) # 0.01 dec. deg. = 1.11 km
+nb_katie <- dnearneigh(gis_katie,0,0.1) # 0.01 dec. deg. = 1.11 km
   
 dat_katie <- dat_katie %>%
     group_by(LokalitetID) %>%
@@ -276,6 +281,8 @@ NDSI_cor_moran_pvalue <- moran.test(moran$avg.NDSI,
 ##########################################################
 ##########################################################
 
+```
+```{r}
 CGFdata1 <- left_join(CGFdata, coordinates)
 #CGFdata1 <- merge(CGFdata, coordinates, by ='LokalitetID')
 dat_katie <- CGFdata1
@@ -291,6 +298,12 @@ nb_katie <- dnearneigh(gis_katie,0,0.2) # 0.01 dec. deg. = 1.11 km
 dat_katie <- dat_katie %>%
     group_by(LokalitetID) %>%
     mutate(avg.NDSI = mean(CGF_NDSI))
+
+
+dat_katie <- dat_katie %>%
+    group_by(LokalitetID) %>%
+    mutate(avg.NDSI = mean(CGF_NDSI))
+
 moran <- dat_katie %>%
   dplyr::select(LokalitetID, avg.NDSI)
 moran <- unique(moran)
@@ -303,10 +316,10 @@ moran.test(moran$avg.NDSI,
              zero.policy = TRUE,
              na.action = na.omit) 
 
-NDSI_cor_moran_pvalue <- 0.04884 # WILL NEED TO ACCOUNT FOR SPATIAL AUTOCORRELATION
+NDSI_cor_moran_pvalue <- 0.1678 # WILL NEED TO ACCOUNT FOR SPATIAL AUTOCORRELATION
+
 
 ```
-
 
 ## overall agreement and distribution
 
@@ -330,9 +343,25 @@ Why would it be in the CGfdataset, but not the NDSI? likely because cloud cover 
 
 ```{r}
 
+# first we need to create a numeric factor recording the coordinates of the sampled locations
+
+# dat <- CGFdata1
+# dat$camCoords <- numFactor(scale(dat$Longitude), scale(dat$Latitude))
+# # then create a dummy group factor to be used as a random term
+# dat$ID <- factor(rep(1, nrow(dat)))
+# 
+# #Model using site location
+## same as with lme4, but now we are using glmmTMB
+# do we have to drop the fixed effect of cameras? It looks like you can, because you now account for grouping 
+# by coordinates, not by camera. 
+## mat stands for matern, which is a covariance function
+# can read about all the covariance structures here: https://cran.r-project.org/web/packages/glmmTMB/vignettes/covstruct.html 
+# mod_CGF <- glmmTMB(CGF_NDSI ~ SnowCover + I(SnowCover^2) + mat(camCoords + 0 | ID), data = dat, family = gaussian())
+# summary(mod_CGF)
+# sims_mod_CGF <- simulateResiduals(mod_CGF)
+# plot(sims_mod_CGF)
+
 ```
-
-
 
 ### distribution and line of best fit
 
@@ -436,7 +465,7 @@ mean_CI_function <- function(data) {
 mean_CI_function(data)
 mean_CI_function(data[data$SnowCover == 0,])
 mean_CI_function(data[data$SnowCover == 4,])
-
+mean_CI_function(data[data$SnowCover >= 1,])
 
 
 ```
@@ -516,6 +545,11 @@ boxplot_agreementcamera <- H1_analysis(data)
 grid.arrange(boxplot_A1camera, boxplot_agreementcamera, ncol=2)
 
 ```
+### reviewer #2 suggestion
+
+```{r}
+
+```
 
 ### test for correlation
 ```{r}
@@ -552,7 +586,9 @@ global_model <- lmerTest::lmer(abs(agreement) ~
 summary(global_model)
 anova(global_model, test = "F")
 
-# n <- length(fixef(global_model)) ## how long the contrast vector needs to be
+library(MuMIn)
+r.squaredGLMM(global_model)#, null
+
 # 
 # L <- matrix(0, ncol =n, nrow=4)
 # L[1,2] <- L[2,3] <- L[3,4] <- L[4,5] <- 1
@@ -563,6 +599,7 @@ anova(global_model, test = "F")
 # L <- rbind(c(0, 1, 0), c(0, 0, 1))
 
 ```
+
 ## reviewer addition: using the variance inflation factor test
 
 Interpretation:
@@ -576,6 +613,396 @@ Greater than 5 = highly correlated.
 ```{r}
 library(car)
 vif(global_model)
+```
+
+
+## check model residuals
+
+For the dispersion test: 
+H0: data is normally distributed
+HA: data is not normally distributed 
+
+
+```{r}
+
+global_model_sims <- simulateResiduals(global_model)
+plot(global_model_sims)
+summary(testZeroInflation(global_model_sims))
+
+testDispersion(global_model_sims)
+## dispersion = 0.97669, p-value = 0.2 
+
+
+## outlier check
+testOutliers(global_model_sims, type = "binomial")
+outlier_indices <- outliers(global_model_sims, lowerQuantile =  0, upperQuantile = 1,
+  return = c("index", "logical"))
+##  could also make lower and upper Q 0 and 1, respectively
+outlierdf <- dataA1_non_null[outlier_indices,]
+plot(outlierdf$SnowCover, outlierdf$NDSImodis)
+plot(outlierdf$Longitude, outlierdf$Latitude)
+hist(outlierdf$Latitude, breaks = 200)
+
+plotResiduals(global_model, form = dataA1_non_null$treecanopycover)
+#residuals(global_model_sims)
+# n <- length(fixef(global_model)) ## how long the contrast vector needs to be
+
+outlierdf[outlierdf['File'] == '2_20200202 (44).JPG',] ## maybe low snow depth
+outlierdf[outlierdf['File'] == '43_0-20190531 (2959).JPG',] ## maybe low snow depth
+outlierdf[outlierdf['File'] == '252_20190430 (5889).JPG',]
+
+
+```
+
+### is it sloope?? 
+
+```{r}
+
+slope <- read.csv('/Users/catherinebreen/Documents/Chapter 3/data/slope.csv')
+slope$LokalitetID <- factor(slope$LokalitetID)
+outlierdf_slope <- left_join(outlierdf, slope)
+
+hist(outlierdf_slope$mean, breaks=10)
+
+```
+
+
+
+```{r}
+# global_model_slope <- lmerTest::lmer(abs(agreement) ~
+#                           (1|LokalitetID) +
+#                           scale(Latitude) + 
+#                          scale(NDVImodis) + scale(treecanopycover) + scale(mean) + binary.labels, data = data_wslope) ### what family should I
+# summary(global_model_slope)
+# 
+# global_model_sims_SLOPE <- simulateResiduals(global_model_slope)
+# plot(global_model_sims_SLOPE)
+# 
+# vif(global_model_slope)
+
+```
+
+### is it low snow depths ##
+
+```{r}
+
+#snow_depthERA <- read.csv('/Users/catherinebreen/Documents/Chapter 3/data/ERAresults_snowDepth_2017-20.csv')
+snow_depthSenorge <- read.csv('/Users/catherinebreen/Documents/Chapter 3/data/results_snowDepth.csv')
+snow_depthSenorge$LokalitetID <- as.factor(snow_depthSenorge$LokalitetID)
+snow_depthSenorge$date <- sapply(strsplit(snow_depthSenorge$imageId,"T"), getElement, 1)
+snow_depthSenorge <- snow_depthSenorge[,c('LokalitetID', 'mean', 'date')]
+colnames(snow_depthSenorge) <- c('LokalitetID', 'snowdepth', 'date')
+snow_depthSenorge$dateFormatted<- as.POSIXct(snow_depthSenorge$date)
+#data$dateFormtted <- dmy(data$Date)
+data$dateFormatted <- as.POSIXct(data$Date, format = '%m/%d/%y')
+outlierdf$dateFormatted <-as.POSIXct(outlierdf$Date,format = '%m/%d/%y')
+#format(snow_depthSenorge$dateFormatted, "%m/%e/%y")   
+
+outlierdf_snow <- merge(outlierdf, snow_depthSenorge, by = c('LokalitetID', 'dateFormatted'))
+hist(outlierdf_snow$snowdepth, breaks= 800)
+## it's a lot of low snow depth values! 
+
+outlierdf_snow$month <- as.integer(sapply(strsplit(outlierdf_snow$Date,"/"), getElement, 1))
+hist(outlierdf_snow$month, breaks = 12)
+
+```
+what happens if we incorporate snow depth as a variable 
+
+```{r}
+data_wsnow <- merge(data, snow_depthSenorge, by = c('LokalitetID', 'dateFormatted'))
+dataA1_non_null
+
+global_model_snow <- lmerTest::lmer(abs(agreement) ~
+                          (1|LokalitetID) +
+                          scale(Latitude) + scale(treecanopycover) + scale(snowdepth) + scale(snowdepth) + binary.labels, data = data_wsnow) ### what family should I
+summary(global_model_snow)
+
+global_model_sims_SNOW <- simulateResiduals(global_model_snow)
+plot(global_model_sims_SNOW)
+
+#vif(global_model_slope)
+
+plot(data_wsnow$snowdepth, data_wsnow$agreement)
+ggplot(data=data_wsnow, aes(x=snowdepth,y= agreement))+geom_point()+geom_smooth()
+
+data_wsnow$month <- sapply(strsplit(data_wsnow$Date,"/"), getElement, 1)
+
+
+```
+
+######################################################
+Spatial autocorrelation
+
+
+After running Moran's test in (6.sp_ac.R), we determined that we do need to take into account spatial autocorrelation. 
+We will use the glmmTmb package in order to fit model while taking into account that cameras closer to each other will be more similiar than cameras further away. 
+
+https://cran.r-project.org/web/packages/glmmTMB/glmmTMB.pdf 
+
+comparing original model to model with spatial information, as done here: https://stats.stackexchange.com/questions/501396/glmmtmb-random-intercepts-vs-spatial-random-field 
+
+so far.. .
+Warning: NA/NaN function evaluation
+Warning: NA/NaN function evaluation
+Warning: NA/NaN function evaluation
+Warning: Model convergence problem; non-positive-definite Hessian matrix. See vignette('troubleshooting')Warning: Model convergence problem; false convergence (8). See vignette('troubleshooting')
+
+
+```{r}
+
+library(spdep)
+library(dplyr)
+# https://datascienceplus.com/spatial-regression-in-r-part-1-spamm-vs-glmmtmb/
+dat_katie <- data
+#dat_katie <- dataA1_non_null 
+stations_katie <- data.frame(unique(dat_katie$LokalitetID))
+names(stations_katie)[names(stations_katie)=="unique.dat_katie.LokalitetID."] <- "LokalitetID"
+
+gis_katie <- data.frame(unique(dat_katie[c("LokalitetID", "Latitude", "Longitude")]))
+gis_katie <- as.matrix(gis_katie[,2:3])
+
+nb_katie <- dnearneigh(gis_katie,0,0.1) # 0.01 dec. deg. = 1.11 km
+
+dat_katie <- dat_katie %>%
+  group_by(LokalitetID) %>%
+  mutate(avg.agree = mean(agreement))
+moran <- dat_katie %>%
+  dplyr::select(LokalitetID, avg.agree)
+moran <- unique(moran)
+moran <- left_join(stations_katie, moran)
+moran <- moran %>%
+  arrange(LokalitetID)
+moran.test(moran$avg.agree,
+           nb2listw(nb_katie, style="W",
+                    zero.policy = TRUE),
+           zero.policy = TRUE,
+           na.action = na.omit)
+
+
+```
+
+```{r}
+library(DHARMa)
+library(glmmTMB)
+# first we need to create a numeric factor recording the coordinates of the sampled locations
+# 
+dat <- data
+dat$camCoords <- numFactor(scale(dat$Longitude), scale(dat$Latitude))
+# then create a dummy group factor to be used as a random term
+dat$ID <- factor(rep(1, nrow(dat)))
+
+#Model using site location
+## same as with lme4, but now we are using glmmTMB
+# do we have to drop the fixed effect of cameras? It looks like you can, because you now account for grouping
+# by coordinates, not by camera.
+## mat stands for matern, which is a covariance function
+# can read about all the covariance structures here: https://cran.r-project.org/web/packages/glmmTMB/vignettes/covstruct.html
+# mod2 <- glmmTMB(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + binary.labels +
+#                    mat(camCoords + 0 | ID), data = dat, family = gaussian()) ## try a different family? poisson
+# summary(mod2)
+# sims2 <- simulateResiduals(mod2)
+# plot(sims2)
+
+# mod3 <- glmmTMB(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + binary.labels +
+#                    (1|LokalitetID), data = dataA1_non_null, family = compois(link = "log") ) ## try a different family? poisson
+# sims3 <- simulateResiduals(mod3)
+# plot(sims3)
+
+
+# library(MuMIn)
+# r.squaredGLMM(mod2)#, null
+
+```
+
+Accounting for temporalautocorrelation
+
+We will explore creating three different ways to have a more informed temporal variable
+
+1. year
+2. julian day
+3. year + julian day
+4. study date (julian day + 365 or 730 depending on study years 2019 or 2020)
+
+
+```{r}
+##from DHARMA
+# res = simulateResiduals(global_model)
+# # aggregating residuals by time
+# res = recalculateResiduals(res, group = data$year)
+# testTemporalAutocorrelation(res, time = unique(data$year))
+# 
+# # testing only subgroup location 1, could do same with loc 2
+# res = recalculateResiduals(res, sel = data$LokalitetID == 864)
+# testTemporalAutocorrelation(res, time = unique(data$year))
+
+#install.packages('timeDate')
+library(timeDate)
+
+data$year <- as.integer(format(data$dateFormatted, format="%Y"))
+data$DOY <- as.integer(format(data$dateFormatted, format="%j"))
+data$julianDate <- round(timeDate::julian(data$dateFormatted, origin = timeDate("1970-01-01"), 
+    units = "days")) ## relative julian day 
+
+## create a dictionary of all the dates + a unique study date ID. It is a julian date + 365 for year 2019 and + 730 for year 2020
+dates2018 <- seq(as.Date("2018-01-01"), as.Date("2018-04-01"), by="days")
+dates2019 <- seq(as.Date("2018-10-01"), as.Date("2019-04-01"), by="days")
+dates2020 <- seq(as.Date("2019-10-01"), as.Date("2020-04-01`"), by="days")
+keys <- c(dates2018, dates2019, dates2020)
+# values <- c()
+# for (i in 1:length(keys)){
+#   dateValue <- keys[i]
+#   if (dateValue < as.Date('2018-09-30')){values <- c(values, i)}  ## 2018 dates
+#   else if (dateValue > as.Date('2019-09-30')){values<- c(values, i + 730)}  # 2020 dates
+#   else {values <- c(values, i+365)}
+# }
+# 
+# ## create vector of study 
+# studyDate <- c()
+# for (i in 1:length(data$dateFormatted)){
+#   index <- which(keys == data$dateFormatted[i])
+#   #if (identical(index, integer(0))){print(data$dateFormatted[i])}
+#   studyDate <- c(studyDate, values[index])
+# }
+# #data$studyDate <- studyDate ## should be same relationship as relative julianDate
+
+## to get a nested value of date between Oct-Mar (1 - 120 so 12/31 and Jan 1 are next to each other)
+
+dayOfWinterSeason <- c()
+for (i in 1:length(data$dateFormatted)){  #length(data$dateFormatted
+  dateValue <- data$dateFormatted[i]
+  if (as.Date(dateValue) < as.Date('2018-09-30')){
+    julDate <- round(julian(dateValue, origin = timeDate("2017-10-01"), units = "days")) 
+    dayOfWinterSeason <- c(dayOfWinterSeason, julDate)}  ## 2018 dates
+  else if (as.Date(dateValue) > as.Date('2019-09-30')){
+    julDate <- round(julian(dateValue, origin = timeDate("2019-10-01"), units = "days")) 
+    dayOfWinterSeason <- c(dayOfWinterSeason, julDate)}  # 2020 dates
+  else {
+    julDate <- round(julian(dateValue, origin = timeDate("2018-10-01"), units = "days")) 
+    dayOfWinterSeason <- c(dayOfWinterSeason, julDate)}
+}
+data$dayofWinterSeason <- as.factor(dayOfWinterSeason)
+
+mod_year <- glmmTMB(abs(agreement) ~ year, data = data)
+summary(mod_year)
+acf(residuals(mod_year))
+
+mod_julian  <- glmmTMB(abs(agreement) ~ julianDate, data = data)
+summary(mod_julian)
+acf(residuals(mod_julian))
+
+mod_dayOfWinterSeason <- glmmTMB(abs(agreement) ~ dayofWinterSeason, data = data)
+summary(mod_dayOfWinterSeason)
+acf(residuals(mod_dayOfWinterSeason))
+
+# mod_studyD  <- glmmTMB(abs(agreement) ~ studyDate, data = data)
+# summary(mod_studyD)
+# acf(residuals(mod_studyD))
+
+### they kind of all show the same thing that values closer in time are more related than values further in time 
+
+```
+
+
+```{r}
+data$year <- as.factor(data$year)
+data$julianDate <- as.factor(data$julianDate) ## relative to 1970-01-01
+data$dayofWinterSeason <- as.factor(data$dayofWinterSeason)
+
+mod_nested <- glmmTMB(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + binary.labels + (1|LokalitetID) +
+                   (1|year/dayofWinterSeason), data = data, family = gaussian()) ## t
+summary(mod_nested)
+sims_mod_temp <- simulateResiduals(mod_nested)
+plot(sims_mod_temp)
+
+```
+Using ar1
+
+https://cran.r-project.org/web/packages/glmmTMB/vignettes/covstruct.html 
+  - describes why it should be time + 0 | stand (it has something to do with a z matrix)
+https://github.com/glmmTMB/glmmTMB/issues/329 
+
+
+```{r}
+### using ar1
+mod_temp <- glmmTMB(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + binary.labels + (1|LokalitetID) +
+                   ar1(julianDate - 1 | LokalitetID), data = data, family = gaussian()) ## try a different family? poisson
+summary(mod_temp)
+sims_mod_temp <- simulateResiduals(mod_temp)
+plot(sims_mod_temp)
+## AIC: 71753.6
+
+mod_temp0 <- glmmTMB(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + binary.labels + (1|LokalitetID) +
+                   ar1(julianDate + 0| LokalitetID), data = data, family = gaussian()) ## try a different family? poisson
+summary(mod_temp0)
+sims_mod_temp0 <- simulateResiduals(mod_temp0)
+plot(sims_mod_temp0)
+## AIC: 71753.6
+
+mod_temp <- glmmTMB(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + binary.labels + (1|LokalitetID),
+                    data = data, family = gaussian()) ## try a different family? poisson
+summary(mod_temp)
+sims_mod_temp <- simulateResiduals(mod_temp)
+plot(sims_mod_temp)
+## AIC: 73583.8
+
+
+```
+testing for dispersion with the ar1 argument 
+```{r}
+
+```
+
+Utilizing Alexej approach:
+1. First make a relative date variable
+2. Then test out different correlation structures 
+
+
+```{r}
+data$yr <- as.integer(as.character(data$year))
+data$relyear <- 365*(data$yr-2018)
+library(plyr)
+relday <- plyr::ddply(data, "yr", summarise, mindat= min(dateFormatted), maxdat= max(dateFormatted))
+relday$timdif <- relday$maxdat - relday$mindat
+
+data <- dplyr::left_join(data, relday, by = "yr")
+
+data$reldat <- data$dateFormatted - data$mindat
+data$reldat <- round(as.integer(data$reldat)/60/60/24, digits =1) ## putting it in days
+data$timdif <- as.integer(data$timdif)
+data$date1 <- data$reldat/data$timdif ## not really sure if I use this 
+
+
+```
+## comparing different temporal models 
+
+```{r}
+## from above
+mod_temp_julian <- glmmTMB(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + binary.labels + (1|LokalitetID) + ar1(julianDate + 0| LokalitetID), data = data, family = gaussian()) ## try a different family? poisson
+summary(mod_temp_julian)
+sims_mod_temp_julian <- simulateResiduals(mod_temp_julian)
+plot(sims_mod_temp_julian)
+## AIC: 71753.6
+
+mod_temp_rel <- glmmTMB(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + binary.labels + (1|LokalitetID) + ar1(factor(reldat) + 0| LokalitetID), data = data, family = gaussian()) ## try a different family? poisson
+summary(mod_temp_rel)
+sims_mod_temp_rel <- simulateResiduals(mod_temp_rel)
+plot(sims_mod_temp_rel)
+
+```
+
+## other correlation structures from Alexej
+https://stat.ethz.ch/R-manual/R-devel/library/nlme/html/corClasses.html
+
+```{r}
+
+# ## ask Alexej if I need to include family ??
+# data_model <- na.omit(data)
+# ## https://stat.ethz.ch/R-manual/R-devel/library/nlme/html/corClasses.html
+# full <- nlme::lme(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + binary.labels, correlation = corAR1(form = ~ reldat + relyear), data=data_model, random = ~ 1|LokalitetID)
+# full <- nlme::lme(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + binary.labels, correlation = corCAR1(form = ~ reldat + relyear), data=data_model, random = ~ 1|LokalitetID)
+# 
+# summary(full)
+
 ```
 
 
@@ -633,12 +1060,40 @@ hist_A1F_CP
 
 ```{r}
 
+dat_katie_CGFdata <- CGFdata
+## add Lat/Long
+
+
+#dat_katie <- dataA1_non_null 
+stations_katieCGF <- data.frame(unique(dat_katie_CGFdata$LokalitetID))
+names(stations_katieCGF)[names(stations_katieCGF)=="unique.dat_katie_CGFdata.LokalitetID."] <- "LokalitetID"
+
+# gis_katieCGF <- data.frame(unique(dat_katie_CGFdata[,c("LokalitetID", "Latitude", "Longitude")]))
+# gis_katieCGF <- as.matrix(gis_katieCGF[,2:3])
+# 
+# nb_katieCGF <- dnearneigh(gis_katieCGF,0,0.2) # 0.01 dec. deg. = 1.11 km
+# 
+# dat_katie_CGFdata <- dat_katie_CGFdata %>%
+#   group_by(LokalitetID) %>%
+#   mutate(avg.agree = mean(agreement))
+# moranCGF <- dat_katie_CGFdata %>%
+#   dplyr::select(LokalitetID, avg.agree)
+# moranCGF <- unique(moran)
+# moranCGF <- left_join(stations_katieCGF, moranCGF)
+# moranCGF <- moranCGF %>%
+#   arrange(LokalitetID)
+# moran.test(moranCGF$avg.agree,
+#            nb2listw(nb_katieCGF, style="W",
+#                     zero.policy = TRUE),
+#            zero.policy = TRUE,
+#            na.action = na.omit)
+
 
 cloud_persistence_analysis <- function(data){
-  gam_CP <- mgcv::gam(agreement ~ s(Cloud_Persistence, k = 7), data=data)
+  gam_CP <- mgcv::gam(agreement ~ s(Cloud_Persistence, k=8), data=data)
   #lmCP <- lm(agreement ~ Cloud_Persistence + I(Cloud_Persistence^2), data=data)
   summary(gam_CP); plot(gam_CP) #, pages = 1)
-  
+  print(summary(gam_CP))
   # visualise predictions from best model
   newdat_CP <- data.frame(Cloud_Persistence = seq(0,14, by = 0.5), agreement = 50)
   # 
@@ -670,8 +1125,54 @@ cloud_persistence_analysis <- function(data){
   return(CP_lineOfBestFit)
 }
 
-
 cloud_persistence_analysis(CGFdata)
+
+
+```
+
+## REVIEWER ADDITION
+Fitting 2nd, 3rd, and 4th polynomial model instead of the GAM for the cloud persistence model
+
+```{r}
+
+cloud_persistence_POLY_analysis <- function(data, poly_degree){
+  poly_CP <-lm(agreement ~ poly(Cloud_Persistence, degree = poly_degree), data = data)
+  #lmCP <- lm(agreement ~ Cloud_Persistence + I(Cloud_Persistence^2), data=data)
+  summary(poly_CP); plot(poly_CP) #, pages = 1)
+  
+  # visualise predictions from best model
+  newdat_CP <- data.frame(Cloud_Persistence = seq(0,14, by = 0.5), agreement = 50)
+  # 
+  # then predict from best model to new dataframe
+  predictionCGF_CP <- predict(poly_CP, newdat_CP, se.fit = T)
+  newdat_CP <- newdat_CP %>%
+    mutate(prediction = predictionCGF_CP[[1]],  se = predictionCGF_CP[[2]]) %>%
+    mutate(lower_ci = prediction - se*1.96,
+      upper_ci = prediction + se*1.96)
+
+  modeledDataCGF_CP <- ggplot(newdat_CP, aes(Cloud_Persistence, prediction)) +
+    theme_minimal() +
+    geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), alpha = 0.5, colour = NA) +
+    geom_line(size = 1.5) +
+    labs(x = "model-predicted satellite CGF values") 
+  
+  CP_lineOfBestFit <- ggplot(data=data, aes(x=Cloud_Persistence,y= agreement)) +
+  theme(text = element_text(size=14), panel.background = element_blank(),
+        axis.line = element_line(colour = "grey"),
+        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1), legend.position = "none") +
+  geom_point(size=0.5) + 
+  geom_jitter(alpha = 0.3, size= 0.5)+
+  geom_line(data=newdat_CP, aes(Cloud_Persistence, prediction), color='blue',size=2)+
+  geom_ribbon(data =newdat_CP, aes(ymin = lower_ci, ymax = upper_ci), alpha = 0.5, fill='blue')+
+  labs(x = "Cloud persistence (days)", y = "Agreement (%)")+ scale_x_continuous(expand = c(0, 0), limits = c(0,14)) + 
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) + geom_smooth(method = "loess")
+  print(newdat_CP)
+  return(CP_lineOfBestFit)
+}
+
+cloud_persistence_POLY_analysis(CGFdata, 2)
+cloud_persistence_POLY_analysis(CGFdata, 3)
+cloud_persistence_POLY_analysis(CGFdata, 4)
 
 
 ```
@@ -925,173 +1426,28 @@ summary(global_model_wNDVImax)
 
 ## end
 
-add kommunes to decrease spatial autocorrelation
-
-```{r}
-kommunes <- read.csv('/Users/catherinebreen/Documents/RemoteSensingPaper/datasets/ScandCam_AllCameras_05072020_GEE.csv')
-kommunes[kommunes$Kommune == 501,]
-kommunes_clean <- kommunes[,c("LokalitetID", "Kommune")]
-kommunes_clean[kommunes_clean$Kommune == 501,]
-head(kommunes)
-kommunes_merged <- merge(data, kommunes_clean, by = 'LokalitetID' )
-kommunes_merged[kommunes_merged$Kommune == 1832,]
-
-unique(kommunes_merged$Kommune)
-hist(kommunes_merged$Kommune, breaks = 100)
-
-dataA1_non_null_coarse_kommune <- na.omit(kommunes_merged)
-#test <- na.omit(data_Saturation)
-dataA1_non_null_coarse_kommune$LokalitetID <- factor(dataA1_non_null_coarse_kommune$LokalitetID)
-dataA1_non_null_coarse_kommune$binary.labels <- factor(dataA1_non_null_coarse_kommune$binary.labels)
-
-global_model_kommune <- lmerTest::lmer(abs(agreement) ~
-                          (1|Kommune) +
-                          scale(Latitude) + 
-                         scale(NDVImodis) + scale(treecanopycover) + binary.labels, data = dataA1_non_null_coarse_kommune) ### what family should I 
-
-summary(global_model_kommune)
-
-```
-
-admin names (county and municpality)
-```{r}
-counties <- read.csv('/Users/catherinebreen/Documents/Chapter 3/data/county_name.csv')
-counties_merged <- merge(data, counties, by = 'LokalitetID' )
-
-unique(counties_merged$ADM0_CODE)  #country
-unique(counties_merged$ADM1_CODE)  #county
-unique(counties_merged$ADM2_CODE)  #district
-```
-
-Run model for spatial correlation by coarsening to kommune, then district, then county level 
+Comparing results to Luo paper by looking at if there cameras were at steeper locations than ours
 
 ```{r}
 
-dataA1_non_null_coarse <- na.omit(counties_merged)
-#test <- na.omit(data_Saturation)
-dataA1_non_null_coarse$LokalitetID <- factor(dataA1_non_null_coarse$LokalitetID)
-dataA1_non_null_coarse$binary.labels <- factor(dataA1_non_null_coarse$binary.labels)
+slope <- read.csv('/Users/catherinebreen/Documents/Chapter 3/data/slope.csv')
+slope$LokalitetID <- factor(slope$LokalitetID)
+all_cameras <- left_join(dat, slope)
+all_cameras <- all_cameras[!is.na(all_cameras$mean),]
+all_cameras <- all_cameras[unique(all_cameras$LokalitetID),]
+hist(all_cameras$mean)
 
+avg.slope <- mean(all_cameras$mean)
+min.slope <- min(all_cameras$mean)
+max.slope <- max(all_cameras$mean)
 
-##get pvalues
-global_model_district <- lmerTest::lmer(abs(agreement) ~
-                          (1|ADM2_CODE) +
-                          scale(Latitude) + 
-                         scale(NDVImodis) + scale(treecanopycover) + binary.labels, data = dataA1_non_null_coarse) ### what family should I 
-
-summary(global_model_district)
-anova(global_model_district, test = "F")
-
-global_model_county <- lmerTest::lmer(abs(agreement) ~
-                          (1|ADM1_CODE) +
-                          scale(Latitude) + 
-                         scale(NDVImodis) + scale(treecanopycover) + binary.labels, data = dataA1_non_null_coarse) ### what family should I 
-
-summary(global_model_county)
-
-global_model_country <- lmerTest::lmer(abs(agreement) ~
-                          (1|ADM0_CODE) +
-                          scale(Latitude) + 
-                         scale(NDVImodis) + scale(treecanopycover) + binary.labels, data = dataA1_non_null_coarse) ### what family should I 
-
-summary(global_model_country)
-
+ffc <- read.csv('/Users/catherinebreen/Documents/RemoteSensingPaper/datasets/forest_fractional_cover_forest_only.csv')
+ffc$LokalitetID <- factor(ffc$LokalitetID)
+all_cameras_ffc <- left_join(dat, ffc)
+all_cameras_ffc <- all_cameras_ffc[!is.na(all_cameras_ffc$mean),]
+all_cameras_ffc <- all_cameras_ffc[unique(all_cameras_ffc$LokalitetID),]
+hist(all_cameras_ffc$mean)
 
 ```
 
-After running Moran's test in (6.sp_ac.R), we determined that we do need to take into account spatial autocorrelation. 
-We will use the glmmTmb package in order to fit model while taking into account that cameras closer to each other will be more similiar than cameras further away. 
-
-https://cran.r-project.org/web/packages/glmmTMB/glmmTMB.pdf 
-
-comparing original model to model with spatial information, as done here: https://stats.stackexchange.com/questions/501396/glmmtmb-random-intercepts-vs-spatial-random-field 
-
-so far.. .
-Warning: NA/NaN function evaluation
-Warning: NA/NaN function evaluation
-Warning: NA/NaN function evaluation
-Warning: Model convergence problem; non-positive-definite Hessian matrix. See vignette('troubleshooting')Warning: Model convergence problem; false convergence (8). See vignette('troubleshooting')
-
-```{r}
-
-library(spdep)
-library(dplyr)
-# https://datascienceplus.com/spatial-regression-in-r-part-1-spamm-vs-glmmtmb/
-dat_katie <- data
-#dat_katie <- dataA1_non_null 
-stations_katie <- data.frame(unique(dat_katie$LokalitetID))
-names(stations_katie)[names(stations_katie)=="unique.dat_katie.LokalitetID."] <- "LokalitetID"
-
-gis_katie <- data.frame(unique(dat_katie[c("LokalitetID", "Latitude", "Longitude")]))
-gis_katie <- as.matrix(gis_katie[,2:3])
-
-nb_katie <- dnearneigh(gis_katie,0,0.2) # 0.01 dec. deg. = 1.11 km
-
-dat_katie <- dat_katie %>%
-  group_by(LokalitetID) %>%
-  mutate(avg.agree = mean(agreement))
-moran <- dat_katie %>%
-  dplyr::select(LokalitetID, avg.agree)
-moran <- unique(moran)
-moran <- left_join(stations_katie, moran)
-moran <- moran %>%
-  arrange(LokalitetID)
-moran.test(moran$avg.agree,
-           nb2listw(nb_katie, style="W",
-                    zero.policy = TRUE),
-           zero.policy = TRUE,
-           na.action = na.omit)
-
-
-```
-
-
-```{r}
-library(DHARMa)
-library(glmmTMB)
-# first we need to create a numeric factor recording the coordinates of the sampled locations
-
-dat <- data
-dat$camCoords <- numFactor(scale(dat$Longitude), scale(dat$Latitude))
-# then create a dummy group factor to be used as a random term
-dat$ID <- factor(rep(1, nrow(dat)))
-
-#Model using only site ID
-mod1 <- glmmTMB(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + 
-                  binary.labels + (1| LokalitetID),data=dat,family=gaussian())
-summary(mod1)
-sims1 <- simulateResiduals(mod1)
-plot(sims1)
-# 
-# X <- model.matrix(~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover),
-#                   data=dat)
-# ncol(X)  ## 13
-# Matrix::rankMatrix(X) ## 11
-
-cor.test(dat$NDVImodis, dat$treecanopycover)
-#Model using site location
-## same as with lme4, but now we are using glmmTMB
-# do we have to drop the fixed effect of cameras? It looks like you can, because you now account for grouping 
-# by coordinates, not by camera. 
-## mat stands for matern, which is a covariance function
-# can read about all the covariance structures here: https://cran.r-project.org/web/packages/glmmTMB/vignettes/covstruct.html 
-mod2 <- glmmTMB(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + binary.labels +
-                   mat(camCoords + 0 | ID), data = dat, family = gaussian())
-summary(mod2)
-sims2 <- simulateResiduals(mod2)
-plot(sims2)
-
-# mod3 <- glmmTMB(abs(agreement) ~ scale(Latitude) + scale(NDVImodis) + scale(treecanopycover) + binary.labels +
-#                   (1|LokalitetID) + mat(camCoords + 0 | ID), data = dat, family = gaussian())
-# ## Warning: Model convergence problem; non-positive-definite Hessian matrix. See vignette('troubleshooting')
-# summary(mod3)
-# sims3 <- simulateResiduals(mod3)
-# plot(sims3)
-
-
-```
-
-
-
-
-
+d
